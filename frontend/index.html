@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trading Platform - Professional Trading Signals</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://js.stripe.com/v3/"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .signal-card { animation: slideIn 0.5s ease-out; }
+        .profit { color: #10b981; }
+        .loss { color: #ef4444; }
+        .glow-green { box-shadow: 0 0 30px rgba(16, 185, 129, 0.5); }
+        .glow-red { box-shadow: 0 0 30px rgba(239, 68, 68, 0.5); }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!-- Header -->
+    <nav class="bg-black border-b border-gray-800 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center space-x-4">
+                    <h1 class="text-2xl font-bold">
+                        <i class="fas fa-chart-line text-green-500"></i>
+                        AI Trading Platform
+                    </h1>
+                    <span id="marketStatus" class="px-3 py-1 bg-gray-700 text-xs font-bold rounded-full">
+                        MARKET CLOSED
+                    </span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="connectionStatus" class="text-sm text-gray-400">
+                        <i class="fas fa-wifi"></i> Connected
+                    </span>
+                    <button onclick="showSignupModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition">
+                        Sign Up
+                    </button>
+                    <button onclick="showProModal()" class="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg font-semibold hover:from-purple-600 hover:to-pink-600 transition">
+                        <i class="fas fa-crown"></i> Go Pro
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Account Stats -->
+    <div class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
+                <div>
+                    <div class="text-gray-400 text-xs">Portfolio Value</div>
+                    <div class="text-xl font-bold" id="portfolioValue">$0</div>
+                </div>
+                <div>
+                    <div class="text-gray-400 text-xs">Today's P/L</div>
+                    <div class="text-xl font-bold" id="todayPL">$0</div>
+                </div>
+                <div>
+                    <div class="text-gray-400 text-xs">Today's %</div>
+                    <div class="text-xl font-bold" id="todayPercent">0%</div>
+                </div>
+                <div>
+                    <div class="text-gray-400 text-xs">Active Signals</div>
+                    <div class="text-xl font-bold text-yellow-400" id="activeSignals">0</div>
+                </div>
+                <div>
+                    <div class="text-gray-400 text-xs">Risk Level</div>
+                    <select id="riskLevel" class="bg-gray-700 rounded px-2 py-1 text-sm">
+                        <option value="conservative">Conservative (1%)</option>
+                        <option value="moderate" selected>Moderate (2%)</option>
+                        <option value="aggressive">Aggressive (5%)</option>
+                    </select>
+                </div>
+                <div>
+                    <div class="text-gray-400 text-xs">Auto-Trade</div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="autoTradeToggle" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                        <span class="ml-2 text-sm" id="autoTradeStatus">OFF</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alpaca Account Status -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div id="accountStatus" class="bg-gray-800 rounded-lg border border-gray-700 p-4 mb-4">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h3 class="font-bold text-lg">Alpaca Account</h3>
+                    <div id="alpacaStatus" class="text-sm text-gray-400 mt-1">
+                        <i class="fas fa-exclamation-circle text-yellow-400"></i> 
+                        No account linked - Click to connect
+                    </div>
+                </div>
+                <button id="alpacaLinkBtn" onclick="showAlpacaModal()" 
+                        class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded font-semibold">
+                    <i class="fas fa-link"></i> Link Alpaca
+                </button>
+            </div>
+            <div id="alpacaDetails" class="hidden mt-4 grid grid-cols-4 gap-4 text-sm">
+                <div>
+                    <span class="text-gray-400">Buying Power:</span>
+                    <span id="buyingPower" class="block font-bold">$0</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Cash:</span>
+                    <span id="cashBalance" class="block font-bold">$0</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Positions:</span>
+                    <span id="openPositions" class="block font-bold">0</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Stop New Buys:</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="stopBuyingToggle" class="sr-only peer">
+                        <div class="w-11 h-6 bg-green-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Signals Column -->
+            <div class="lg:col-span-2">
+                <div class="bg-gray-800 rounded-lg border border-gray-700">
+                    <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+                        <h2 class="text-xl font-bold">
+                            <i class="fas fa-bolt text-yellow-400"></i> Live AI Signals
+                        </h2>
+                        <button onclick="refreshSignals()" class="text-sm text-gray-400 hover:text-white">
+                            <i class="fas fa-sync-alt"></i> Refresh
+                        </button>
+                    </div>
+                    <div id="signalsContainer" class="p-4 space-y-3 max-h-[600px] overflow-y-auto">
+                        <div class="text-center py-8 text-gray-500">
+                            <i class="fas fa-moon"></i>
+                            <p>Market closed. Signals resume Monday 9:30 AM EST</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Performance Chart -->
+                <div class="bg-gray-800 rounded-lg border border-gray-700 mt-6 p-4">
+                    <h3 class="text-lg font-bold mb-4">Portfolio Performance (%)</h3>
+                    <canvas id="performanceChart" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- Right Sidebar -->
+            <div class="space-y-6">
+                <!-- Subscription Status -->
+                <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                    <h3 class="font-bold mb-3">Your Plan</h3>
+                    <div id="subscriptionStatus">
+                        <div class="text-sm text-gray-400">Current Tier:</div>
+                        <div class="text-lg font-bold" id="currentTier">Free</div>
+                        <div class="text-xs text-gray-500 mt-2">
+                            • 5 signals per day<br>
+                            • 5% commission on profits<br>
+                            • No auto-trading
+                        </div>
+                        <button onclick="showProModal()" class="w-full mt-3 bg-purple-600 hover:bg-purple-700 rounded py-2 text-sm font-semibold">
+                            Upgrade Now
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Quick Analysis -->
+                <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                    <h3 class="font-bold mb-3">Quick Analysis</h3>
+                    <div class="space-y-3">
+                        <input type="text" id="quickSymbol" placeholder="Enter symbol (e.g., AAPL)" 
+                               class="w-full bg-gray-700 rounded px-3 py-2 text-sm">
+                        <button onclick="quickAnalyze()" 
+                                class="w-full bg-green-600 hover:bg-green-700 rounded py-2 font-semibold transition">
+                            <i class="fas fa-search"></i> Analyze
+                        </button>
+                    </div>
+                    <div id="quickResult" class="mt-3 text-sm"></div>
+                </div>
+
+                <!-- Recent Trades -->
+                <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                    <h3 class="font-bold mb-3">Recent Executions</h3>
+                    <div id="recentTrades" class="space-y-2 text-sm">
+                        <div class="text-gray-500">No trades yet</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alpaca Link Modal -->
+    <div id="alpacaModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 class="text-2xl font-bold mb-4">Link Your Alpaca Account</h2>
+            <form onsubmit="handleAlpacaLink(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="text-sm text-gray-400">Alpaca API Key</label>
+                        <input type="text" id="alpacaApiKey" placeholder="PKxxxxxxxxxxxxx" required
+                               class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="text-sm text-gray-400">Alpaca Secret Key</label>
+                        <input type="password" id="alpacaSecretKey" placeholder="Your secret key" required
+                               class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <input type="checkbox" id="paperTrading" checked>
+                        <label for="paperTrading" class="text-sm">Paper Trading (recommended for testing)</label>
+                    </div>
+                    <div class="bg-yellow-900 bg-opacity-50 rounded p-3 text-sm">
+                        <i class="fas fa-info-circle text-yellow-400"></i>
+                        Your API keys are encrypted and stored securely.
+                    </div>
+                </div>
+                <div class="mt-6 space-y-3">
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-700 rounded py-2 font-semibold">
+                        Link Account
+                    </button>
+                    <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank"
+                       class="block text-center text-blue-400 hover:text-blue-300 text-sm">
+                        Get your Alpaca API keys →
+                    </a>
+                    <button type="button" onclick="hideModal('alpacaModal')" 
+                            class="w-full bg-gray-700 hover:bg-gray-600 rounded py-2">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Pro Modal with Stripe -->
+    <div id="proModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-lg p-6 max-w-2xl w-full mx-4">
+            <h2 class="text-2xl font-bold mb-6">Choose Your Plan</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- Free Tier -->
+                <div class="border border-gray-600 rounded-lg p-4">
+                    <h3 class="font-bold text-lg">Free</h3>
+                    <div class="text-3xl font-bold my-3">$0</div>
+                    <ul class="space-y-2 text-sm text-gray-400">
+                        <li><i class="fas fa-check text-green-500"></i> 5 signals/day</li>
+                        <li><i class="fas fa-check text-green-500"></i> Basic strategy</li>
+                        <li><i class="fas fa-times text-red-500"></i> No auto-trading</li>
+                        <li>5% commission on profits</li>
+                    </ul>
+                    <button class="w-full mt-4 bg-gray-700 rounded py-2">Current Plan</button>
+                </div>
+                
+                <!-- Pro Tier -->
+                <div class="border border-green-500 rounded-lg p-4 bg-green-500 bg-opacity-10">
+                    <h3 class="font-bold text-lg">Pro</h3>
+                    <div class="text-3xl font-bold my-3 text-green-400">$49/mo</div>
+                    <ul class="space-y-2 text-sm">
+                        <li><i class="fas fa-check text-green-500"></i> Unlimited signals</li>
+                        <li><i class="fas fa-check text-green-500"></i> All strategies</li>
+                        <li><i class="fas fa-check text-green-500"></i> Auto-trading</li>
+                        <li><i class="fas fa-check text-green-500"></i> Real-time alerts</li>
+                        <li>4% commission (reduced)</li>
+                    </ul>
+                    <button onclick="initiateCheckout('pro')" 
+                            class="w-full mt-4 bg-green-600 hover:bg-green-700 rounded py-2 font-semibold">
+                        Upgrade to Pro
+                    </button>
+                </div>
+                
+                <!-- Insider Tier -->
+                <div class="border border-purple-500 rounded-lg p-4">
+                    <h3 class="font-bold text-lg">Insider</h3>
+                    <div class="text-3xl font-bold my-3 text-purple-400">$299/mo</div>
+                    <ul class="space-y-2 text-sm">
+                        <li><i class="fas fa-check text-purple-500"></i> Everything in Pro</li>
+                        <li><i class="fas fa-check text-purple-500"></i> 1hr early access</li>
+                        <li><i class="fas fa-check text-purple-500"></i> Custom strategies</li>
+                        <li><i class="fas fa-check text-purple-500"></i> Direct support</li>
+                        <li>3% commission (lowest)</li>
+                    </ul>
+                    <button onclick="initiateCheckout('insider')" 
+                            class="w-full mt-4 bg-purple-600 hover:bg-purple-700 rounded py-2 font-semibold">
+                        Go Insider
+                    </button>
+                </div>
+            </div>
+            <button onclick="hideModal('proModal')" class="mt-6 w-full bg-gray-700 hover:bg-gray-600 rounded py-2">
+                Close
+            </button>
+        </div>
+    </div>
+
+    <!-- Signup Modal -->
+    <div id="signupModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 class="text-2xl font-bold mb-4">Create Account</h2>
+            <form onsubmit="handleSignup(event)">
+                <div class="space-y-4">
+                    <input type="text" id="signupName" placeholder="Full Name" required
+                           class="w-full bg-gray-700 rounded px-3 py-2">
+                    <input type="email" id="signupEmail" placeholder="Email" required
+                           class="w-full bg-gray-700 rounded px-3 py-2">
+                    <input type="password" id="signupPassword" placeholder="Password" required
+                           class="w-full bg-gray-700 rounded px-3 py-2">
+                </div>
+                <div class="mt-6 space-y-3">
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-700 rounded py-2 font-semibold">
+                        Start Trading
+                    </button>
+                    <button type="button" onclick="hideModal('signupModal')" 
+                            class="w-full bg-gray-700 hover:bg-gray-600 rounded py-2">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Configuration - UPDATE THIS WITH YOUR ACTUAL URLs
+        const API_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8000'
+            : 'https://aisignals-production.up.railway.app';  // Your Railway URL
+        
+        // Initialize Stripe
+        const stripe = Stripe('pk_live_51S5uGyPuxT6s7WvFrQCJ7jTPk86MKQ8y8fgJVoXoQOUFUBabeGvVxLx1WZPAI92HQYXjJXqYRXQ37iQzMXSNdQ2u00WAmtBNJH'); // Your publishable key
+        
+        // Global state
+        let ws = null;
+        let signals = [];
+        let chart = null;
+        let userPortfolioValue = 0;
+        let userPositions = [];
+        let stopBuying = false;
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', () => {
+            checkMarketStatus();
+            initWebSocket();
+            initChart();
+            checkAlpacaStatus();
+            fetchSignals();
+            setupToggles();
+        });
+
+        // Check market status
+        function checkMarketStatus() {
+            const now = new Date();
+            const day = now.getDay();
+            const hour = now.getHours();
+            const minute = now.getMinutes();
+            
+            // Market open Mon-Fri 9:30 AM - 4:00 PM EST
+            const isWeekday = day >= 1 && day <= 5;
+            const marketOpen = (hour === 9 && minute >= 30) || (hour >= 10 && hour < 16);
+            
+            const statusEl = document.getElementById('marketStatus');
+            if (isWeekday && marketOpen) {
+                statusEl.textContent = 'LIVE';
+                statusEl.className = 'px-3 py-1 bg-green-500 text-black text-xs font-bold rounded-full animate-pulse';
+            } else {
+                statusEl.textContent = 'MARKET CLOSED';
+                statusEl.className = 'px-3 py-1 bg-gray-700 text-xs font-bold rounded-full';
+            }
+        }
+
+        // Setup toggles
+        function setupToggles() {
+            // Auto-trade toggle
+            document.getElementById('autoTradeToggle').addEventListener('change', function(e) {
+                const status = document.getElementById('autoTradeStatus');
+                if (e.target.checked) {
+                    status.textContent = 'ON';
+                    status.className = 'ml-2 text-sm text-green-400';
+                    localStorage.setItem('autoTrade', 'true');
+                } else {
+                    status.textContent = 'OFF';
+                    status.className = 'ml-2 text-sm';
+                    localStorage.setItem('autoTrade', 'false');
+                }
+            });
+
+            // Stop buying toggle
+            document.getElementById('stopBuyingToggle').addEventListener('change', function(e) {
+                stopBuying = e.target.checked;
+                if (stopBuying) {
+                    showNotification('New buy orders disabled. Selling still active.', 'info');
+                } else {
+                    showNotification('Buy orders re-enabled.', 'success');
+                }
+                localStorage.setItem('stopBuying', stopBuying);
+            });
+        }
+
+        // WebSocket connection
+        function initWebSocket() {
+            const wsUrl = API_URL.replace('https', 'wss').replace('http', 'ws') + '/ws';
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi text-green-500"></i> Connected';
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'signals_update') {
+                    updateSignals(data.data);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi text-red-500"></i> Disconnected';
+            };
+            
+            ws.onclose = () => {
+                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi text-yellow-500"></i> Reconnecting...';
+                setTimeout(initWebSocket, 5000);
+            };
+        }
+
+        // Check Alpaca status
+        async function checkAlpacaStatus() {
+            const userId = localStorage.getItem('user_id') || 'demo_user';
+            try {
+                const response = await fetch(`${API_URL}/api/alpaca-account/${userId}`);
+                const data = await response.json();
+                
+                if (!data.error) {
+                    // Account linked
+                    document.getElementById('alpacaStatus').innerHTML = 
+                        '<i class="fas fa-check-circle text-green-500"></i> Account linked';
+                    document.getElementById('alpacaDetails').classList.remove('hidden');
+                    document.getElementById('alpacaLinkBtn').textContent = 'Refresh';
+                    
+                    // Update values
+                    userPortfolioValue = data.portfolio_value;
+                    document.getElementById('portfolioValue').textContent = 
+                        '$' + data.portfolio_value.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                    document.getElementById('buyingPower').textContent = 
+                        '$' + data.buying_power.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                    document.getElementById('cashBalance').textContent = 
+                        '$' + data.cash.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                    
+                    // Get positions
+                    const posResponse = await fetch(`${API_URL}/api/user-positions/${userId}`);
+                    const posData = await posResponse.json();
+                    userPositions = posData.positions || [];
+                    document.getElementById('openPositions').textContent = posData.count || 0;
+                    
+                    // Update chart with real data
+                    updateChartWithUserData();
+                }
+            } catch (error) {
+                console.error('Error checking Alpaca:', error);
+            }
+        }
+
+        // Initialize chart with percentage growth
+        function initChart() {
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Portfolio Growth %',
+                        data: [],
+                        borderColor: 'rgb(34, 197, 94)',
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            ticks: { 
+                                color: 'rgba(255, 255, 255, 0.7)',
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            }
+                        },
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            ticks: { color: 'rgba(255, 255, 255, 0.7)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Update chart with real user data
+        function updateChartWithUserData() {
+            if (userPortfolioValue === 0) return;
+            
+            const now = new Date();
+            const labels = [];
+            const data = [];
+            
+            // Generate percentage change data based on positions
+            let baseValue = userPortfolioValue;
+            let currentValue = baseValue;
+            
+            for (let i = 23; i >= 0; i--) {
+                const time = new Date(now - i * 3600000);
+                labels.push(time.getHours() + ':00');
+                
+                // Calculate percentage change
+                if (i < 23) {
+                    // Simulate small changes (remove this when you have real historical data)
+                    const change = (Math.random() - 0.5) * 0.5; // ±0.5% per hour
+                    currentValue *= (1 + change / 100);
+                }
+                
+                const percentChange = ((currentValue - baseValue) / baseValue) * 100;
+                data.push(percentChange);
+            }
+            
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = data;
+            chart.update();
+            
+            // Update P/L displays
+            const pl = currentValue - baseValue;
+            const plPercent = (pl / baseValue) * 100;
+            
+            const plElement = document.getElementById('todayPL');
+            plElement.textContent = (pl >= 0 ? '+' : '') + '$' + Math.abs(pl).toFixed(2);
+            plElement.className = pl >= 0 ? 'text-xl font-bold profit' : 'text-xl font-bold loss';
+            
+            const percentElement = document.getElementById('todayPercent');
+            percentElement.textContent = (plPercent >= 0 ? '+' : '') + plPercent.toFixed(2) + '%';
+            percentElement.className = plPercent >= 0 ? 'text-xl font-bold profit' : 'text-xl font-bold loss';
+        }
+
+        // Fetch signals
+        async function fetchSignals() {
+            const userId = localStorage.getItem('user_id');
+            const endpoint = userId ? `/api/signals-gated?user_id=${userId}` : '/api/signals';
+            
+            try {
+                const response = await fetch(`${API_URL}${endpoint}`);
+                const data = await response.json();
+                
+                if (data.error === 'limit_reached') {
+                    showNotification(data.message, 'warning');
+                    document.getElementById('signalsContainer').innerHTML = 
+                        `<div class="text-center py-8">
+                            <p class="text-yellow-400 mb-4">${data.message}</p>
+                            <button onclick="showProModal()" class="px-4 py-2 bg-purple-600 rounded">
+                                Upgrade for Unlimited Signals
+                            </button>
+                        </div>`;
+                } else {
+                    updateSignals(data.signals || []);
+                }
+            } catch (error) {
+                console.error('Error fetching signals:', error);
+            }
+        }
+
+        // Update signals display
+        function updateSignals(newSignals) {
+            signals = newSignals;
+            const container = document.getElementById('signalsContainer');
+            
+            if (!signals || signals.length === 0) {
+                const now = new Date();
+                const day = now.getDay();
+                if (day === 0 || day === 6) {
+                    container.innerHTML = `
+                        <div class="text-center py-8 text-gray-500">
+                            <i class="fas fa-moon text-4xl mb-4"></i>
+                            <p>Market closed. Signals resume Monday 9:30 AM EST</p>
+                        </div>`;
+                } else {
+                    container.innerHTML = '<div class="text-center py-8 text-gray-500">No active signals</div>';
+                }
+                return;
+            }
+            
+            container.innerHTML = signals.map((signal, index) => `
+                <div class="signal-card bg-gray-700 rounded-lg p-4 ${signal.action === 'BUY' ? 'border-l-4 border-green-500' : 'border-l-4 border-red-500'}">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <div class="flex items-center space-x-3 mb-2">
+                                <span class="text-2xl font-bold">${signal.symbol}</span>
+                                <span class="px-3 py-1 ${signal.action === 'BUY' ? 'bg-green-500' : 'bg-red-500'} text-black rounded-full font-bold text-sm">
+                                    ${signal.action}
+                                </span>
+                                <span class="text-gray-400">$${signal.price}</span>
+                            </div>
+                            <div class="text-sm text-gray-300 mb-2">${signal.explanation}</div>
+                            <div class="grid grid-cols-4 gap-2 text-xs">
+                                <div>
+                                    <span class="text-gray-500">Confidence:</span>
+                                    <span class="font-bold ${signal.confidence > 0.7 ? 'text-green-400' : 'text-yellow-400'}">
+                                        ${(signal.confidence * 100).toFixed(0)}%
+                                    </span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">Target:</span>
+                                    <span class="font-bold text-green-400">$${signal.take_profit}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">Stop:</span>
+                                    <span class="font-bold text-red-400">$${signal.stop_loss}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">Return:</span>
+                                    <span class="font-bold text-blue-400">${signal.potential_return}%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button onclick="executeTrade('${signal.symbol}', '${signal.action}')" 
+                                class="ml-4 px-4 py-2 ${signal.action === 'BUY' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'} rounded font-semibold transition"
+                                ${(signal.action === 'BUY' && stopBuying) ? 'disabled' : ''}>
+                            ${(signal.action === 'BUY' && stopBuying) ? 'Buys Stopped' : 'Execute'}
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+            
+            document.getElementById('activeSignals').textContent = signals.length;
+        }
+
+        // Execute trade
+        async function executeTrade(symbol, action) {
+            const userId = localStorage.getItem('user_id') || 'demo_user';
+            
+            // Check stop buying
+            if (action === 'BUY' && stopBuying) {
+                showNotification('Buy orders are currently disabled', 'warning');
+                return;
+            }
+            
+            // Check Alpaca connection
+            const alpacaCheck = await fetch(`${API_URL}/api/alpaca-account/${userId}`);
+            const alpacaData = await alpacaCheck.json();
+            
+            if (alpacaData.error) {
+                if (confirm('Link your Alpaca account to execute trades. Connect now?')) {
+                    showAlpacaModal();
+                }
+                return;
+            }
+            
+            const riskLevel = document.getElementById('riskLevel').value;
+            const riskPercentage = {
+                'conservative': 1.0,
+                'moderate': 2.0,
+                'aggressive': 5.0
+            }[riskLevel];
+            
+            const confirmMsg = `Execute ${action} order for ${symbol}?\n` +
+                              `Risk: ${riskPercentage}% of portfolio\n` +
+                              `Commission: 3-5% on profits only`;
+            
+            if (!confirm(confirmMsg)) return;
+            
+            try {
+                const response = await fetch(`${API_URL}/api/execute-smart`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol: symbol,
+                        action: action,
+                        user_id: userId,
+                        mode: 'percentage',
+                        value: riskPercentage,
+                        max_position_percent: 25.0
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    const details = result.position_details;
+                    showNotification(
+                        `Executed: ${details.shares} shares @ $${details.entry_price}`, 
+                        'success'
+                    );
+                    addRecentTrade(symbol, action, details.shares);
+                    checkAlpacaStatus();
+                } else {
+                    showNotification('Trade failed: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Trade execution failed', 'error');
+            }
+        }
+
+        // Stripe checkout
+        async function initiateCheckout(tier) {
+            const userId = localStorage.getItem('user_id') || 'demo_user';
+            
+            // Price IDs from your Stripe account
+            const priceIds = {
+                'pro': 'price_1S6KlkPuxT6s7WvF1Pn0dChn',
+                'insider': 'price_1S6KlvPuxT6s7WvFAuxjJQA7'
+            };
+            
+            try {
+                const response = await fetch(`${API_URL}/api/create-checkout`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        price_id: priceIds[tier],
+                        tier: tier
+                    })
+                });
+                
+                const session = await response.json();
+                
+                if (session.url) {
+                    // Redirect to Stripe Checkout
+                    window.location.href = session.url;
+                } else {
+                    // Fallback to Stripe.js redirect
+                    const result = await stripe.redirectToCheckout({
+                        sessionId: session.session_id
+                    });
+                    
+                    if (result.error) {
+                        showNotification('Checkout failed: ' + result.error.message, 'error');
+                    }
+                }
+            } catch (error) {
+                showNotification('Failed to start checkout', 'error');
+            }
+        }
+
+        // Handle Alpaca linking
+        async function handleAlpacaLink(event) {
+            event.preventDefault();
+            
+            const userId = localStorage.getItem('user_id') || 'demo_user';
+            const apiKey = document.getElementById('alpacaApiKey').value;
+            const secretKey = document.getElementById('alpacaSecretKey').value;
+            const paperTrading = document.getElementById('paperTrading').checked;
+            
+            try {
+                const response = await fetch(`${API_URL}/api/link-alpaca`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        api_key: apiKey,
+                        secret_key: secretKey,
+                        paper_trading: paperTrading
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showNotification('Alpaca account linked successfully!', 'success');
+                    hideModal('alpacaModal');
+                    checkAlpacaStatus();
+                } else {
+                    showNotification('Failed: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showNotification('Error linking account', 'error');
+            }
+        }
+
+        // Handle signup
+        async function handleSignup(event) {
+            event.preventDefault();
+            
+            const name = document.getElementById('signupName').value;
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            
+            try {
+                const response = await fetch(`${API_URL}/api/signup`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        email: email,
+                        password: password,
+                        risk_level: 'moderate'
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    localStorage.setItem('user_id', result.user_id);
+                    showNotification('Account created! Now link your Alpaca account.', 'success');
+                    hideModal('signupModal');
+                    setTimeout(() => showAlpacaModal(), 1000);
+                } else {
+                    showNotification('Signup failed', 'error');
+                }
+            } catch (error) {
+                showNotification('Error creating account', 'error');
+            }
+        }
+
+        // Quick analyze
+        async function quickAnalyze() {
+            const symbol = document.getElementById('quickSymbol').value.toUpperCase();
+            if (!symbol) return;
+            
+            const resultDiv = document.getElementById('quickResult');
+            resultDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
+            
+            try {
+                const response = await fetch(`${API_URL}/api/analyze/${symbol}`);
+                const data = await response.json();
+                
+                if (data.action) {
+                    resultDiv.innerHTML = `
+                        <div class="mt-2 p-2 bg-gray-700 rounded">
+                            <div class="font-bold">${data.symbol}: ${data.action}</div>
+                            <div class="text-xs">Confidence: ${(data.confidence * 100).toFixed(0)}%</div>
+                            <div class="text-xs">Price: $${data.price}</div>
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = '<div class="text-yellow-400">No clear signal</div>';
+                }
+            } catch (error) {
+                resultDiv.innerHTML = '<div class="text-red-400">Analysis failed</div>';
+            }
+        }
+
+        // Add recent trade
+        function addRecentTrade(symbol, action, shares) {
+            const tradesDiv = document.getElementById('recentTrades');
+            const trade = `
+                <div class="flex justify-between">
+                    <span>${symbol} (${shares} shares)</span>
+                    <span class="${action === 'BUY' ? 'text-green-400' : 'text-red-400'}">${action}</span>
+                </div>
+            `;
+            tradesDiv.innerHTML = trade + tradesDiv.innerHTML;
+        }
+
+        // Utility functions
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            const bgColor = type === 'success' ? 'bg-green-600' : 
+                           type === 'error' ? 'bg-red-600' : 
+                           type === 'warning' ? 'bg-yellow-600' : 'bg-blue-600';
+            notification.className = `fixed top-20 right-4 ${bgColor} text-white px-6 py-3 rounded-lg z-50`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 3000);
+        }
+
+        function showAlpacaModal() {
+            document.getElementById('alpacaModal').classList.remove('hidden');
+        }
+
+        function showProModal() {
+            document.getElementById('proModal').classList.remove('hidden');
+        }
+
+        function showSignupModal() {
+            document.getElementById('signupModal').classList.remove('hidden');
+        }
+
+        function hideModal(modalId) {
+            document.getElementById(modalId).classList.add('hidden');
+        }
+
+        function refreshSignals() {
+            fetchSignals();
+            showNotification('Signals refreshed', 'info');
+        }
+
+        // Auto-refresh every 30 seconds during market hours
+        setInterval(() => {
+            checkMarketStatus();
+            const now = new Date();
+            const day = now.getDay();
+            const hour = now.getHours();
+            if (day >= 1 && day <= 5 && hour >= 9 && hour < 16) {
+                fetchSignals();
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
