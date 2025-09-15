@@ -63,8 +63,26 @@ ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
 engine = AdvancedTradingEngine(ALPACA_KEY, ALPACA_SECRET) if ALPACA_KEY else None
 
 # Generate encryption key for storing API keys
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY") or Fernet.generate_key().decode()
-cipher = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+if not ENCRYPTION_KEY or ENCRYPTION_KEY == "generate_with_fernet" or ENCRYPTION_KEY == "generate-random-string-here":
+    # Generate a valid key if placeholder or missing
+    ENCRYPTION_KEY = Fernet.generate_key()
+    logger.warning("Generated new encryption key - set ENCRYPTION_KEY env var in production")
+else:
+    # Ensure the key is in bytes format
+    try:
+        if isinstance(ENCRYPTION_KEY, str):
+            ENCRYPTION_KEY = ENCRYPTION_KEY.encode()
+    except:
+        ENCRYPTION_KEY = Fernet.generate_key()
+        logger.warning("Invalid encryption key format - generated new one")
+
+try:
+    cipher = Fernet(ENCRYPTION_KEY)
+except Exception as e:
+    logger.error(f"Encryption key error: {e}")
+    ENCRYPTION_KEY = Fernet.generate_key()
+    cipher = Fernet(ENCRYPTION_KEY)
 
 # Global state
 active_websockets = set()
