@@ -120,7 +120,7 @@ class AdvancedTradingEngine:
         df['Momentum_5'] = (df['Close'] - df['Close'].shift(5)) / df['Close'].shift(5)
         df['Momentum_10'] = (df['Close'] - df['Close'].shift(10)) / df['Close'].shift(10)
         
-        return df.fillna(method='ffill').fillna(0)
+        return df.ffill().fillna(0)
         
     def trend_following_strategy(self, df: pd.DataFrame) -> Dict:
         """Trend following using multiple timeframes"""
@@ -284,38 +284,39 @@ class AdvancedTradingEngine:
             }
             
             # Combine signals
-           # Combine signals
             final_signal = self.combine_strategies(strategies)
             
             # ML Enhancement (optional)
             try:
                 from ml_brain import ml_brain
-        
-        # Prepare market data for ML
-        ml_market_data = {
-            'rsi': df['RSI'].iloc[-1],
-            'macd': df['MACD'].iloc[-1],
-            'volume_ratio': df['Volume_ratio'].iloc[-1],
-            'momentum_5': df['Momentum_5'].iloc[-1],
-            'momentum_10': df['Momentum_10'].iloc[-1],
-            'sma_20': df['SMA_20'].iloc[-1],
-            'sma_50': df['SMA_50'].iloc[-1],
-            'atr': df['ATR'].iloc[-1],
-            'volatility': df['ATR'].iloc[-1] / df['Close'].iloc[-1]
-        }
-        
-        # Get ML prediction
-        ml_prediction = ml_brain.predict(ml_market_data)
-        
-        # If ML has high confidence, override traditional signal
-        if ml_prediction['ml_powered'] and ml_prediction['confidence'] > 0.8:
-            final_signal['action'] = ml_prediction['action']
-            final_signal['confidence'] = ml_prediction['confidence']
-            final_signal['dominant_strategy'] = 'ML_' + final_signal['dominant_strategy']
-            
-            logging.info(f"ML Override for {symbol}: {ml_prediction['action']} ({ml_prediction['confidence']:.2f})")
-    except Exception as e:
-        logging.warning(f"ML prediction failed: {e}")
+                
+                # Prepare market data for ML
+                ml_market_data = {
+                    'rsi': df['RSI'].iloc[-1],
+                    'macd': df['MACD'].iloc[-1],
+                    'volume_ratio': df['Volume_ratio'].iloc[-1],
+                    'momentum_5': df['Momentum_5'].iloc[-1],
+                    'momentum_10': df['Momentum_10'].iloc[-1],
+                    'sma_20': df['SMA_20'].iloc[-1],
+                    'sma_50': df['SMA_50'].iloc[-1],
+                    'atr': df['ATR'].iloc[-1],
+                    'volatility': df['ATR'].iloc[-1] / df['Close'].iloc[-1],
+                    'bb_position': df['BB_position'].iloc[-1]
+                }
+                
+                # Get ML prediction
+                ml_prediction = ml_brain.predict(ml_market_data)
+                
+                # If ML has high confidence, override traditional signal
+                if ml_prediction['ml_powered'] and ml_prediction['confidence'] > 0.8:
+                    final_signal['action'] = ml_prediction['action']
+                    final_signal['confidence'] = ml_prediction['confidence']
+                    final_signal['dominant_strategy'] = 'ML_' + final_signal['dominant_strategy']
+                    
+                    logging.info(f"ML Override for {symbol}: {ml_prediction['action']} ({ml_prediction['confidence']:.2f})")
+            except Exception as e:
+                logging.debug(f"ML prediction failed (not critical): {e}")
+                
             if final_signal['action'] == 'HOLD':
                 return None
                 
