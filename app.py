@@ -1,30 +1,43 @@
-from ml_brain import ml_brain, generate_ml_prediction, get_ml_stats
 import os
 import asyncio
 import json
+import secrets
+import hashlib
+import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-from fastapi import FastAPI, WebSocket, HTTPException, Depends, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-import logging
-from trading_engine import AdvancedTradingEngine, Signal
-from supabase import create_client, Client
-import hashlib
-import secrets
-import numpy as np
-# Add this to app.py for FULL Alpaca account linking
 
+# FastAPI and web framework imports
+from fastapi import FastAPI, WebSocket, HTTPException, Request, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+
+# External libraries
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import stripe
 import alpaca_trade_api as tradeapi
 from cryptography.fernet import Fernet
-import base64
 
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+# Your local imports
+from trading_engine import AdvancedTradingEngine, Signal
+from ml_brain import ml_brain, generate_ml_prediction, get_ml_stats
 
-# Environment variables
-ALPACA_KEY = os.getenv("ALPACA_API_KEY_ID")  # Note: _ID at the end
-ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
+# Optional imports with error handling
+try:
+    from supabase import create_client, Client
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL else None
+except:
+    supabase = None
+    print("Supabase not configured - running without database")
+
+# Health check endpoint - MUST be first endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "photon"}
 
 # Generate encryption key for storing API keys (store this in env)
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY") or Fernet.generate_key().decode()
@@ -1424,15 +1437,32 @@ async def commission_monitor_loop():
             logger.error(f"Commission monitor error: {e}")
             await asyncio.sleep(60)
 
-# Add to startup
+async def keep_alive():
+    """Keep the app alive by preventing idle timeout"""
+    while True:
+        await asyncio.sleep(300)  # Every 5 minutes
+        logger.info(f"Keep-alive ping at {datetime.now()}")
+        
+        # Also check if market scanner is running
+        if not any(task.get_name() == "market_scanner" for task in asyncio.all_tasks()):
+            logger.warning("Market scanner stopped - restarting")
+            asyncio.create_task(continuous_scanner())
+
 @app.on_event("startup")
 async def startup_event():
     """Start background tasks on startup"""
-    asyncio.create_task(continuous_scanner())
-    asyncio.create_task(commission_monitor_loop())  # Add this
-    asyncio.create_task(generate_initial_training_data())
-    logger.info("AI Trading Platform started with commission monitoring")
-# At the bottom of app.py
+    # Set names for tasks so we can monitor them
+    asyncio.create_task(continuous_scanner(), name="market_scanner")
+    asyncio.create_task(commission_monitor_loop(), name="commission_monitor")
+    asyncio.create_task(keep_alive(), name="keep_alive")
+    asyncio.create_task(generate_initial_training_data(), name="ml_training")
+    
+    logger.info("=" * 50)
+    logger.info("PHOTON TRADING PLATFORM STARTED")
+    logger.info(f"Market Scanner: Active")
+    logger.info(f"Commission Monitor: Active")
+    logger.info(f"ML Brain: Initializing")
+    logger.info("=" * 50)# At the bottom of app.py
 if __name__ == "__main__":
     import uvicorn
     
@@ -1449,3 +1479,14 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+# At the VERY BOTTOM of app.py - make sure this is the last code
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    print(f"Starting Photon Trading Platform on port {port}")
+    uvicorn.run(
+        "app:app",  # String format prevents reload issues
+        host="0.0.0.0",
+        port=port,
+        log_level="info"
+    )
