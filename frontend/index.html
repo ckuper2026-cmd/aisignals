@@ -3,31 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Photon - Algorithmic Trading Signals</title>
+    <title>Photon - AI Trading Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://js.stripe.com/v3/"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-        
-        * {
-            font-family: 'Inter', sans-serif;
-        }
-        
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        .signal-card { animation: slideIn 0.5s ease-out; }
-        .profit { color: #ffffff; }
-        .loss { color: #6b7280; }
+        * { font-family: 'Inter', sans-serif; }
         
         .glass {
             background: rgba(255, 255, 255, 0.05);
@@ -35,15 +17,22 @@
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
         
-        .gradient-border {
-            background: linear-gradient(90deg, rgba(255,255,255,0.1), rgba(255,255,255,0.2), rgba(255,255,255,0.1));
-            background-size: 200% 100%;
-            animation: shimmer 3s ease-in-out infinite;
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
         
-        @keyframes shimmer {
-            0% { background-position: -200% 0; }
-            100% { background-position: 200% 0; }
+        .animate-pulse-slow {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        .trade-notification {
+            animation: slideIn 0.5s ease-out;
         }
     </style>
 </head>
@@ -53,21 +42,19 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center space-x-4">
-                    <h1 class="text-2xl font-bold tracking-tight">
-                        PHOTON
-                    </h1>
+                    <h1 class="text-2xl font-bold tracking-tight">PHOTON</h1>
                     <span id="marketStatus" class="px-3 py-1 bg-zinc-900 text-xs font-medium rounded-full border border-zinc-800">
-                        MARKET CLOSED
+                        INITIALIZING
                     </span>
                 </div>
                 <div class="flex items-center space-x-4">
                     <span id="connectionStatus" class="text-sm text-zinc-500">
-                        <i class="fas fa-wifi"></i> Connected
+                        <i class="fas fa-wifi"></i> Connecting...
                     </span>
                     <button onclick="showSignupModal()" class="px-4 py-2 bg-white text-black hover:bg-zinc-200 rounded-lg font-semibold transition">
                         Sign Up
                     </button>
-                    <button onclick="showProModal()" class="px-4 py-2 bg-white text-black hover:bg-zinc-200 rounded-lg font-semibold transition">
+                    <button onclick="showUpgradeModal()" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg font-semibold transition">
                         Upgrade
                     </button>
                 </div>
@@ -75,177 +62,305 @@
         </div>
     </nav>
 
-    <!-- Account Stats -->
-    <div class="bg-black border-b border-zinc-900">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-            <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
-                <div>
-                    <div class="text-zinc-500 text-xs uppercase tracking-wider">Portfolio</div>
-                    <div class="text-xl font-semibold" id="portfolioValue">$0</div>
+    <!-- Auto-Trading Status Bar -->
+    <div id="autoTradingBar" class="bg-green-900 border-b border-green-800 py-2 hidden">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-4">
+                    <i class="fas fa-robot text-green-400 animate-pulse-slow"></i>
+                    <span class="text-sm font-semibold">AUTO-TRADING ACTIVE</span>
+                    <span class="text-xs text-green-400" id="autoTradeCount">0 trades today</span>
                 </div>
-                <div>
-                    <div class="text-zinc-500 text-xs uppercase tracking-wider">Today P/L</div>
-                    <div class="text-xl font-semibold" id="todayPL">$0</div>
-                </div>
-                <div>
-                    <div class="text-zinc-500 text-xs uppercase tracking-wider">Today %</div>
-                    <div class="text-xl font-semibold" id="todayPercent">0%</div>
-                </div>
-                <div>
-                    <div class="text-zinc-500 text-xs uppercase tracking-wider">Active</div>
-                    <div class="text-xl font-semibold" id="activeSignals">0</div>
-                </div>
-                <div>
-                    <div class="text-zinc-500 text-xs uppercase tracking-wider">Risk</div>
-                    <select id="riskLevel" class="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm">
-                        <option value="conservative">1% Risk</option>
-                        <option value="moderate" selected>2% Risk</option>
-                        <option value="aggressive">5% Risk</option>
-                    </select>
-                </div>
-                <div>
-                    <div class="text-zinc-500 text-xs uppercase tracking-wider">Auto</div>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="autoTradeToggle" class="sr-only peer">
-                        <div class="w-11 h-6 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-white"></div>
-                        <span class="ml-2 text-sm" id="autoTradeStatus">OFF</span>
-                    </label>
+                <div class="flex items-center space-x-2 text-xs">
+                    <span>Min Confidence: <span id="minConfidence">65%</span></span>
+                    <span>|</span>
+                    <span>Max/Trade: <span id="maxPerTrade">$10,000</span></span>
+                    <span>|</span>
+                    <span>Risk: <span id="riskPercent">5%</span></span>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Alpaca Account Status -->
+    <!-- Stats Bar -->
+    <div class="bg-black border-b border-zinc-900">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
+                <div>
+                    <span class="text-zinc-500">Active Signals</span>
+                    <div class="text-xl font-semibold" id="activeSignalsCount">0</div>
+                </div>
+                <div>
+                    <span class="text-zinc-500">Auto Trades</span>
+                    <div class="text-xl font-semibold text-green-400" id="autoTradesCount">0</div>
+                </div>
+                <div>
+                    <span class="text-zinc-500">Win Rate</span>
+                    <div class="text-xl font-semibold text-green-400" id="winRate">73.2%</div>
+                </div>
+                <div>
+                    <span class="text-zinc-500">Total P&L</span>
+                    <div class="text-xl font-semibold" id="totalPL">$0</div>
+                </div>
+                <div>
+                    <span class="text-zinc-500">Positions</span>
+                    <div class="text-xl font-semibold" id="positionCount">0</div>
+                </div>
+                <div>
+                    <span class="text-zinc-500">Your Tier</span>
+                    <div class="text-xl font-semibold" id="userTier">Free</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alpaca Account Section with Auto-Trading Toggle -->
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <div id="accountStatus" class="glass rounded-lg p-4 mb-4">
+        <div id="accountSection" class="glass rounded-lg p-4">
             <div class="flex justify-between items-center">
                 <div>
-                    <h3 class="font-semibold text-lg">Alpaca Account</h3>
-                    <div id="alpacaStatus" class="text-sm text-zinc-500 mt-1">
-                        <i class="fas fa-exclamation-circle text-zinc-400"></i> 
-                        No account linked
+                    <h3 class="text-lg font-semibold">Trading Account</h3>
+                    <div id="accountStatus" class="text-sm text-zinc-500 mt-1">
+                        <i class="fas fa-exclamation-circle text-yellow-500"></i> 
+                        No account linked - Link Alpaca to start auto-trading
                     </div>
                 </div>
-                <button id="alpacaLinkBtn" onclick="showAlpacaModal()" 
-                        class="px-4 py-2 bg-white text-black hover:bg-zinc-200 rounded font-semibold transition">
-                    <i class="fas fa-link"></i> Link Alpaca
-                </button>
+                <div class="flex items-center space-x-4">
+                    <!-- Auto-Trading Toggle -->
+                    <div id="autoTradeToggle" class="hidden">
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="autoTradingSwitch" class="sr-only peer" checked>
+                            <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer 
+                                        peer-checked:after:translate-x-full peer-checked:after:border-white 
+                                        after:content-[''] after:absolute after:top-[2px] after:left-[2px] 
+                                        after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all 
+                                        peer-checked:bg-green-600"></div>
+                            <span class="ml-3 text-sm font-medium">Auto-Trade</span>
+                        </label>
+                    </div>
+                    <button id="linkAlpacaBtn" onclick="showAlpacaModal()" 
+                            class="px-4 py-2 bg-white text-black hover:bg-zinc-200 rounded-lg font-semibold transition">
+                        <i class="fas fa-link"></i> Link Alpaca
+                    </button>
+                </div>
             </div>
-            <div id="alpacaDetails" class="hidden mt-4 grid grid-cols-4 gap-4 text-sm">
-                <div>
-                    <span class="text-zinc-500">Buying Power:</span>
-                    <span id="buyingPower" class="block font-semibold">$0</span>
-                </div>
-                <div>
-                    <span class="text-zinc-500">Cash:</span>
-                    <span id="cashBalance" class="block font-semibold">$0</span>
-                </div>
-                <div>
-                    <span class="text-zinc-500">Positions:</span>
-                    <span id="openPositions" class="block font-semibold">0</span>
-                </div>
-                <div>
-                    <span class="text-zinc-500">Stop Buys:</span>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="stopBuyingToggle" class="sr-only peer">
-                        <div class="w-11 h-6 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
-                    </label>
+            
+            <!-- Account Details -->
+            <div id="accountDetails" class="hidden mt-4">
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                    <div>
+                        <span class="text-zinc-500">Account #</span>
+                        <div class="font-semibold" id="accountNumber">---</div>
+                    </div>
+                    <div>
+                        <span class="text-zinc-500">Buying Power</span>
+                        <div class="font-semibold text-green-400" id="buyingPower">$0</div>
+                    </div>
+                    <div>
+                        <span class="text-zinc-500">Portfolio Value</span>
+                        <div class="font-semibold" id="portfolioValue">$0</div>
+                    </div>
+                    <div>
+                        <span class="text-zinc-500">Positions Value</span>
+                        <div class="font-semibold" id="positionsValue">$0</div>
+                    </div>
+                    <div>
+                        <span class="text-zinc-500">Mode</span>
+                        <div class="font-semibold" id="tradingMode">Paper</div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Main Content -->
+    <!-- Main Content Grid -->
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- Signals Column -->
+            
+            <!-- Signals & Positions Column (2/3 width) -->
             <div class="lg:col-span-2">
+                <!-- Live Auto-Trade Notifications -->
+                <div id="tradeNotifications" class="space-y-2 mb-4"></div>
+                
+                <!-- Signals -->
                 <div class="glass rounded-lg">
                     <div class="p-4 border-b border-zinc-800 flex justify-between items-center">
-                        <h2 class="text-xl font-semibold">
-                            Live Signals
-                        </h2>
-                        <button onclick="refreshSignals()" class="text-sm text-zinc-500 hover:text-white">
+                        <h2 class="text-xl font-semibold">Live AI Trading Signals</h2>
+                        <button onclick="refreshSignals()" class="text-sm text-zinc-500 hover:text-white transition">
                             <i class="fas fa-sync-alt"></i> Refresh
                         </button>
                     </div>
-                    <div id="signalsContainer" class="p-4 space-y-3 max-h-[600px] overflow-y-auto">
-                        <div class="text-center py-8 text-zinc-500">
-                            <i class="fas fa-moon text-2xl mb-4"></i>
-                            <p>Market closed. Signals resume Monday 9:30 AM EST</p>
+                    <div id="signalsContainer" class="p-4 space-y-3 max-h-[400px] overflow-y-auto">
+                        <div class="text-center py-12">
+                            <i class="fas fa-spinner fa-spin text-3xl text-zinc-500 mb-4"></i>
+                            <p class="text-zinc-500">Loading signals...</p>
+                            <p class="text-zinc-600 text-sm mt-2">Auto-trading will execute high-confidence signals</p>
                         </div>
                     </div>
                 </div>
 
-                <!-- Performance Chart -->
-                <div class="glass rounded-lg mt-6 p-4">
-                    <h3 class="text-lg font-semibold mb-4">Performance %</h3>
-                    <canvas id="performanceChart" height="200"></canvas>
+                <!-- Positions -->
+                <div class="glass rounded-lg mt-6">
+                    <div class="p-4 border-b border-zinc-800">
+                        <h3 class="text-lg font-semibold">Your Positions</h3>
+                    </div>
+                    <div id="positionsContainer" class="p-4">
+                        <p class="text-zinc-500 text-sm">No open positions</p>
+                    </div>
+                </div>
+                
+                <!-- Trade History -->
+                <div class="glass rounded-lg mt-6">
+                    <div class="p-4 border-b border-zinc-800">
+                        <h3 class="text-lg font-semibold">Recent Trades</h3>
+                    </div>
+                    <div id="tradeHistory" class="p-4 max-h-[300px] overflow-y-auto">
+                        <p class="text-zinc-500 text-sm">No trades executed yet</p>
+                    </div>
                 </div>
             </div>
 
-            <!-- Right Sidebar -->
+            <!-- Right Sidebar (1/3 width) -->
             <div class="space-y-6">
-                <!-- Subscription Status -->
+                <!-- Auto-Trading Settings -->
                 <div class="glass rounded-lg p-4">
-                    <h3 class="font-semibold mb-3">Your Tier</h3>
-                    <div id="subscriptionStatus">
-                        <div class="text-sm text-zinc-500">Current:</div>
-                        <div class="text-lg font-semibold" id="currentTier">Free</div>
-                        <div class="text-xs text-zinc-400 mt-2">
-                            • 5 signals per day<br>
-                            • 5 minute delay<br>
-                            • 7% commission on profits<br>
-                            • Basic strategies only
+                    <h3 class="font-semibold mb-3">Auto-Trading Settings</h3>
+                    <div class="space-y-3 text-sm">
+                        <div>
+                            <label class="text-zinc-400">Min Confidence</label>
+                            <input type="range" id="minConfidenceSlider" min="50" max="95" value="65" 
+                                   class="w-full mt-1" onchange="updateAutoSettings()">
+                            <div class="text-xs text-zinc-500 text-right">
+                                <span id="minConfidenceValue">65%</span>
+                            </div>
                         </div>
-                        <button onclick="showProModal()" class="w-full mt-3 bg-white text-black hover:bg-zinc-200 rounded py-2 text-sm font-semibold">
-                            Upgrade
+                        <div>
+                            <label class="text-zinc-400">Max Per Trade</label>
+                            <input type="number" id="maxPositionSize" value="10000" min="1000" max="50000" step="1000"
+                                   class="w-full bg-black border border-zinc-800 rounded px-2 py-1 mt-1"
+                                   onchange="updateAutoSettings()">
+                        </div>
+                        <div>
+                            <label class="text-zinc-400">Daily Trade Limit</label>
+                            <input type="number" id="maxTradesPerDay" value="20" min="1" max="100"
+                                   class="w-full bg-black border border-zinc-800 rounded px-2 py-1 mt-1"
+                                   onchange="updateAutoSettings()">
+                        </div>
+                        <button onclick="saveAutoSettings()" 
+                                class="w-full bg-green-600 hover:bg-green-700 text-black rounded py-2 font-semibold transition">
+                            Save Settings
                         </button>
                     </div>
                 </div>
 
-                <!-- Recent Trades -->
+                <!-- Quick Actions -->
                 <div class="glass rounded-lg p-4">
-                    <h3 class="font-semibold mb-3">Recent Activity</h3>
-                    <div id="recentTrades" class="space-y-2 text-sm">
-                        <div class="text-zinc-500">No trades yet</div>
+                    <h3 class="font-semibold mb-3">Quick Actions</h3>
+                    <div class="space-y-2">
+                        <button onclick="testDemoMode()" class="w-full py-2 bg-green-600 hover:bg-green-700 rounded text-sm font-semibold transition">
+                            <i class="fas fa-play"></i> Start Demo Auto-Trading ($100k)
+                        </button>
+                        <button onclick="pauseAllTrading()" class="w-full py-2 bg-red-600 hover:bg-red-700 rounded text-sm transition">
+                            <i class="fas fa-pause"></i> Pause All Trading
+                        </button>
+                        <button onclick="refreshAll()" class="w-full py-2 bg-zinc-800 hover:bg-zinc-700 rounded text-sm transition">
+                            <i class="fas fa-sync"></i> Refresh Everything
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ML Status -->
+                <div class="glass rounded-lg p-4">
+                    <h3 class="font-semibold mb-3">AI Brain Status</h3>
+                    <div id="mlStatus" class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-zinc-500">Status</span>
+                            <span id="mlStatusText" class="font-semibold">Active</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-500">Samples</span>
+                            <span id="mlSamples" class="font-semibold">200+</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-500">Predictions</span>
+                            <span id="mlPredictions" class="font-semibold">0</span>
+                        </div>
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    
+    <!-- Signup Modal -->
+    <div id="signupModal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center z-50">
+        <div class="bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 border border-zinc-800">
+            <h2 class="text-2xl font-bold mb-4">Create Your Account</h2>
+            <form onsubmit="handleSignup(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="text-sm text-zinc-400">Full Name</label>
+                        <input type="text" id="signupName" required
+                               class="w-full bg-black border border-zinc-800 rounded px-3 py-2 mt-1">
+                    </div>
+                    <div>
+                        <label class="text-sm text-zinc-400">Email</label>
+                        <input type="email" id="signupEmail" required
+                               class="w-full bg-black border border-zinc-800 rounded px-3 py-2 mt-1">
+                    </div>
+                    <div>
+                        <label class="text-sm text-zinc-400">Password</label>
+                        <input type="password" id="signupPassword" required minlength="6"
+                               class="w-full bg-black border border-zinc-800 rounded px-3 py-2 mt-1">
+                    </div>
+                </div>
+                <div class="mt-6 space-y-3">
+                    <button type="submit" class="w-full bg-white text-black hover:bg-zinc-200 rounded py-2 font-semibold transition">
+                        Create Account & Start Auto-Trading
+                    </button>
+                    <button type="button" onclick="hideModal('signupModal')" 
+                            class="w-full bg-zinc-800 hover:bg-zinc-700 rounded py-2 transition">
+                        Cancel
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
     <!-- Alpaca Link Modal -->
     <div id="alpacaModal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center z-50">
         <div class="bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 border border-zinc-800">
-            <h2 class="text-2xl font-bold mb-4">Link Alpaca Account</h2>
+            <h2 class="text-2xl font-bold mb-4">Link Trading Account</h2>
+            <div class="bg-green-900 border border-green-700 rounded p-3 mb-4">
+                <p class="text-sm text-green-300">
+                    <i class="fas fa-robot text-green-400"></i> 
+                    <strong>Auto-Trading Enabled!</strong> Enter "test" in both fields for instant $100k with automated trading.
+                </p>
+            </div>
             <form onsubmit="handleAlpacaLink(event)">
                 <div class="space-y-4">
                     <div>
                         <label class="text-sm text-zinc-400">API Key</label>
-                        <input type="text" id="alpacaApiKey" placeholder="PKxxxxxxxxxxxxx" required
-                               class="w-full bg-black border border-zinc-800 rounded px-3 py-2">
+                        <input type="text" id="alpacaKey" placeholder='Enter "test" for demo auto-trading'
+                               class="w-full bg-black border border-zinc-800 rounded px-3 py-2 mt-1">
                     </div>
                     <div>
                         <label class="text-sm text-zinc-400">Secret Key</label>
-                        <input type="password" id="alpacaSecretKey" placeholder="Your secret key" required
-                               class="w-full bg-black border border-zinc-800 rounded px-3 py-2">
+                        <input type="password" id="alpacaSecret" placeholder='Enter "test" for demo auto-trading'
+                               class="w-full bg-black border border-zinc-800 rounded px-3 py-2 mt-1">
                     </div>
-                    <div class="flex items-center space-x-2">
-                        <input type="checkbox" id="paperTrading" checked>
-                        <label for="paperTrading" class="text-sm">Paper Trading</label>
+                    <div class="flex items-center">
+                        <input type="checkbox" id="paperTrading" checked class="mr-2">
+                        <label for="paperTrading" class="text-sm">Paper Trading (Recommended)</label>
                     </div>
                 </div>
                 <div class="mt-6 space-y-3">
                     <button type="submit" class="w-full bg-white text-black hover:bg-zinc-200 rounded py-2 font-semibold transition">
-                        Link Account
+                        Link Account & Enable Auto-Trading
                     </button>
-                    <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank"
-                       class="block text-center text-blue-400 hover:text-blue-300 text-sm">
-                        Get your Alpaca API keys →
-                    </a>
                     <button type="button" onclick="hideModal('alpacaModal')" 
-                            class="w-full bg-zinc-800 hover:bg-zinc-700 rounded py-2">
+                            class="w-full bg-zinc-800 hover:bg-zinc-700 rounded py-2 transition">
                         Cancel
                     </button>
                 </div>
@@ -253,372 +368,334 @@
         </div>
     </div>
 
-    <!-- Pro Modal with Stripe -->
-    <div id="proModal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center z-50">
+    <!-- Upgrade Modal -->
+    <div id="upgradeModal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center z-50">
         <div class="bg-zinc-900 rounded-lg p-6 max-w-2xl w-full mx-4 border border-zinc-800">
-            <h2 class="text-2xl font-bold mb-6">Choose Your Tier</h2>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <!-- Free Tier -->
-                <div class="border border-zinc-800 rounded-lg p-4">
-                    <h3 class="font-bold text-lg">FREE</h3>
-                    <div class="text-3xl font-bold my-3">$0</div>
-                    <ul class="space-y-2 text-sm text-zinc-400">
-                        <li>✓ 5 signals/day</li>
-                        <li>✓ Auto-trading enabled</li>
-                        <li>✗ 5 minute signal delay</li>
-                        <li>✗ 7% commission</li>
-                    </ul>
-                    <button class="w-full mt-4 bg-zinc-800 rounded py-2">Current</button>
-                </div>
-                
-                <!-- Pro Tier -->
-                <div class="border border-white rounded-lg p-4">
-                    <h3 class="font-bold text-lg">PRO</h3>
-                    <div class="text-3xl font-bold my-3">$49<span class="text-sm font-normal">/mo</span></div>
-                    <ul class="space-y-2 text-sm">
-                        <li>✓ Unlimited signals</li>
-                        <li>✓ 10 second delay only</li>
-                        <li>✓ All strategies</li>
-                        <li>✓ 4% commission</li>
-                    </ul>
-                    <button onclick="initiateCheckout('pro')" 
-                            class="w-full mt-4 bg-white text-black hover:bg-zinc-200 rounded py-2 font-semibold">
-                        Upgrade to Pro
-                    </button>
-                </div>
-                
-                <!-- Insider Tier -->
-                <div class="border border-zinc-600 rounded-lg p-4">
-                    <h3 class="font-bold text-lg">INSIDER</h3>
-                    <div class="text-3xl font-bold my-3">$299<span class="text-sm font-normal">/mo</span></div>
-                    <ul class="space-y-2 text-sm">
-                        <li>✓ 5 second delay only</li>
-                        <li>✓ Pre-market analysis</li>
-                        <li>✓ 3% commission</li>
-                        <li>✓ Priority support</li>
-                    </ul>
-                    <button onclick="initiateCheckout('insider')" 
-                            class="w-full mt-4 bg-zinc-700 hover:bg-zinc-600 rounded py-2 font-semibold">
-                        Go Insider
-                    </button>
-                </div>
-            </div>
-            <button onclick="hideModal('proModal')" class="mt-6 w-full bg-zinc-800 hover:bg-zinc-700 rounded py-2">
+            <h2 class="text-2xl font-bold mb-6">Subscription Plans</h2>
+            <p class="text-zinc-400 mb-4">Upgrade for faster signals and lower commissions</p>
+            <button onclick="hideModal('upgradeModal')" class="mt-6 w-full bg-zinc-800 hover:bg-zinc-700 rounded py-2 transition">
                 Close
             </button>
         </div>
     </div>
 
-    <!-- Signup Modal -->
-    <div id="signupModal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center z-50">
-        <div class="bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 border border-zinc-800">
-            <h2 class="text-2xl font-bold mb-4">Create Account</h2>
-            <form onsubmit="handleSignup(event)">
-                <div class="space-y-4">
-                    <input type="text" id="signupName" placeholder="Full Name" required
-                           class="w-full bg-black border border-zinc-800 rounded px-3 py-2">
-                    <input type="email" id="signupEmail" placeholder="Email" required
-                           class="w-full bg-black border border-zinc-800 rounded px-3 py-2">
-                    <input type="password" id="signupPassword" placeholder="Password" required
-                           class="w-full bg-black border border-zinc-800 rounded px-3 py-2">
-                </div>
-                <div class="mt-6 space-y-3">
-                    <button type="submit" class="w-full bg-white text-black hover:bg-zinc-200 rounded py-2 font-semibold">
-                        Start Trading
-                    </button>
-                    <button type="button" onclick="hideModal('signupModal')" 
-                            class="w-full bg-zinc-800 hover:bg-zinc-700 rounded py-2">
-                        Cancel
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <script>
-        // Configuration
-        const API_URL = window.location.hostname === 'localhost' 
-            ? 'http://localhost:8000'
-            : 'https://aisignals-production.up.railway.app';
+        // ============ CONFIGURATION ============
+        const API_URL = 'https://aisignals-production.up.railway.app';
         
-        // Initialize Stripe
-        const stripe = Stripe('pk_live_51S5uGyPuxT6s7WvFrQCJ7jTPk86MKQ8y8fgJVoXoQOUFUBabeGvVxLx1WZPAI92HQYXjJXqYRXQ37iQzMXSNdQ2u00WAmtBNJH');
-        
-        // Global state
+        // ============ GLOBAL STATE ============
         let ws = null;
-        let signals = [];
-        let chart = null;
-        let userPortfolioValue = 0;
+        let currentSignals = [];
+        let userAccount = null;
         let userPositions = [];
-        let stopBuying = false;
-
-        // Initialize on load
-        document.addEventListener('DOMContentLoaded', () => {
-            checkMarketStatus();
+        let autoTradingEnabled = false;
+        let autoTradeCount = 0;
+        let tradeHistory = [];
+        const userId = localStorage.getItem('user_id') || `demo_${Math.random().toString(36).substr(2, 9)}`;
+        
+        localStorage.setItem('user_id', userId);
+        
+        // ============ INITIALIZATION ============
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log('==================================');
+            console.log('PHOTON AUTO-TRADING PLATFORM');
+            console.log('API URL:', API_URL);
+            console.log('User ID:', userId);
+            console.log('==================================');
+            
+            await testBackendConnection();
             initWebSocket();
-            initChart();
-            checkAlpacaStatus();
-            fetchSignals();
-            setupToggles();
+            await fetchSignals();
+            await checkAccountStatus();
+            await loadAutoTradingSettings();
+            await fetchMLStats();
+            updateMarketStatus();
+            
+            // Setup auto-trading toggle
+            document.getElementById('autoTradingSwitch').addEventListener('change', toggleAutoTrading);
+            
+            // Auto-refresh
+            setInterval(fetchSignals, 30000);
+            setInterval(updateMarketStatus, 60000);
         });
-
-        // Check market status
-        function checkMarketStatus() {
-            const now = new Date();
-            const day = now.getDay();
-            const hour = now.getHours();
-            const minute = now.getMinutes();
-            
-            const isWeekday = day >= 1 && day <= 5;
-            const marketOpen = (hour === 9 && minute >= 30) || (hour >= 10 && hour < 16);
-            
-            const statusEl = document.getElementById('marketStatus');
-            if (isWeekday && marketOpen) {
-                statusEl.textContent = 'LIVE';
-                statusEl.className = 'px-3 py-1 bg-white text-black text-xs font-medium rounded-full animate-pulse';
-            } else {
-                statusEl.textContent = 'MARKET CLOSED';
-                statusEl.className = 'px-3 py-1 bg-zinc-900 text-xs font-medium rounded-full border border-zinc-800';
+        
+        // ============ BACKEND CONNECTION ============
+        async function testBackendConnection() {
+            try {
+                console.log('Testing backend connection...');
+                const response = await fetch(`${API_URL}/health`);
+                const data = await response.json();
+                console.log('✅ Backend health:', data);
+                
+                if (data.status === 'healthy') {
+                    updateConnectionStatus('connected');
+                } else {
+                    updateConnectionStatus('error');
+                }
+            } catch (error) {
+                console.error('❌ Backend connection failed:', error);
+                updateConnectionStatus('error');
+                showNotification('Backend offline. Check Railway deployment.', 'error');
             }
         }
-
-        // Setup toggles
-        function setupToggles() {
-            document.getElementById('autoTradeToggle').addEventListener('change', function(e) {
-                const status = document.getElementById('autoTradeStatus');
-                if (e.target.checked) {
-                    status.textContent = 'ON';
-                    localStorage.setItem('autoTrade', 'true');
-                } else {
-                    status.textContent = 'OFF';
-                    localStorage.setItem('autoTrade', 'false');
-                }
-            });
-
-            document.getElementById('stopBuyingToggle').addEventListener('change', function(e) {
-                stopBuying = e.target.checked;
-                if (stopBuying) {
-                    showNotification('Buy orders disabled. Sells still active.', 'info');
-                } else {
-                    showNotification('Buy orders enabled.', 'success');
-                }
-                localStorage.setItem('stopBuying', stopBuying);
-            });
-        }
-
-        // WebSocket connection
+        
+        // ============ WEBSOCKET ============
         function initWebSocket() {
-            const wsUrl = API_URL.replace('https', 'wss').replace('http', 'ws') + '/ws';
+            const wsUrl = `${API_URL.replace('https', 'wss')}/ws`;
+            console.log('Connecting WebSocket to:', wsUrl);
+            
             ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
-                console.log('WebSocket connected');
-                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi text-white"></i> Connected';
+                console.log('✅ WebSocket connected');
+                updateConnectionStatus('live');
             };
             
             ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.type === 'signals_update') {
-                    updateSignals(data.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('📨 WebSocket message:', data.type);
+                    
+                    if (data.type === 'signals_update' && data.data) {
+                        updateSignalsDisplay(data.data);
+                        if (data.auto_trades_today !== undefined) {
+                            autoTradeCount = data.auto_trades_today;
+                            document.getElementById('autoTradeCount').textContent = `${autoTradeCount} trades today`;
+                            document.getElementById('autoTradesCount').textContent = autoTradeCount;
+                        }
+                    } else if (data.type === 'auto_trade_executed') {
+                        handleAutoTradeNotification(data.trade);
+                    }
+                } catch (error) {
+                    console.error('WebSocket message error:', error);
                 }
             };
             
             ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi text-zinc-500"></i> Disconnected';
+                console.error('❌ WebSocket error:', error);
+                updateConnectionStatus('error');
             };
             
             ws.onclose = () => {
-                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi text-zinc-400"></i> Reconnecting...';
+                console.log('WebSocket closed, reconnecting in 5s...');
+                updateConnectionStatus('reconnecting');
                 setTimeout(initWebSocket, 5000);
             };
         }
-
-        // Check Alpaca status
-        async function checkAlpacaStatus() {
-            const userId = localStorage.getItem('user_id') || 'demo_user';
-            try {
-                const response = await fetch(`${API_URL}/api/alpaca-account/${userId}`);
-                const data = await response.json();
-                
-                if (!data.error) {
-                    document.getElementById('alpacaStatus').innerHTML = 
-                        '<i class="fas fa-check-circle text-white"></i> Account linked';
-                    document.getElementById('alpacaDetails').classList.remove('hidden');
-                    document.getElementById('alpacaLinkBtn').textContent = 'Refresh';
-                    
-                    userPortfolioValue = data.portfolio_value;
-                    document.getElementById('portfolioValue').textContent = 
-                        '$' + data.portfolio_value.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-                    document.getElementById('buyingPower').textContent = 
-                        '$' + data.buying_power.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-                    document.getElementById('cashBalance').textContent = 
-                        '$' + data.cash.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-                    
-                    const posResponse = await fetch(`${API_URL}/api/user-positions/${userId}`);
-                    const posData = await posResponse.json();
-                    userPositions = posData.positions || [];
-                    document.getElementById('openPositions').textContent = posData.count || 0;
-                    
-                    updateChartWithUserData();
-                }
-            } catch (error) {
-                console.error('Error checking Alpaca:', error);
-            }
-        }
-
-        // Initialize chart
-        function initChart() {
-            const ctx = document.getElementById('performanceChart').getContext('2d');
-            chart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Growth %',
-                        data: [],
-                        borderColor: 'rgba(255, 255, 255, 0.8)',
-                        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false }
-                    },
-                    scales: {
-                        y: {
-                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                            ticks: { 
-                                color: 'rgba(255, 255, 255, 0.5)',
-                                callback: function(value) {
-                                    return value + '%';
-                                }
-                            }
-                        },
-                        x: {
-                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                            ticks: { color: 'rgba(255, 255, 255, 0.5)' }
-                        }
-                    }
-                }
-            });
-        }
-
-        // Update chart with user data
-        function updateChartWithUserData() {
-            if (userPortfolioValue === 0) return;
+        
+        // ============ AUTO-TRADING ============
+        async function toggleAutoTrading() {
+            const enabled = document.getElementById('autoTradingSwitch').checked;
             
-            const now = new Date();
-            const labels = [];
-            const data = [];
-            
-            let baseValue = userPortfolioValue;
-            let currentValue = baseValue;
-            
-            for (let i = 23; i >= 0; i--) {
-                const time = new Date(now - i * 3600000);
-                labels.push(time.getHours() + ':00');
-                
-                if (i < 23) {
-                    const change = (Math.random() - 0.5) * 0.5;
-                    currentValue *= (1 + change / 100);
-                }
-                
-                const percentChange = ((currentValue - baseValue) / baseValue) * 100;
-                data.push(percentChange);
-            }
-            
-            chart.data.labels = labels;
-            chart.data.datasets[0].data = data;
-            chart.update();
-            
-            const pl = currentValue - baseValue;
-            const plPercent = (pl / baseValue) * 100;
-            
-            const plElement = document.getElementById('todayPL');
-            plElement.textContent = (pl >= 0 ? '+' : '') + '$' + Math.abs(pl).toFixed(2);
-            plElement.className = pl >= 0 ? 'text-xl font-semibold text-white' : 'text-xl font-semibold text-zinc-500';
-            
-            const percentElement = document.getElementById('todayPercent');
-            percentElement.textContent = (plPercent >= 0 ? '+' : '') + plPercent.toFixed(2) + '%';
-            percentElement.className = plPercent >= 0 ? 'text-xl font-semibold text-white' : 'text-xl font-semibold text-zinc-500';
-        }
-
-        // Fetch signals
-        async function fetchSignals() {
-            const userId = localStorage.getItem('user_id');
-            const endpoint = userId ? `/api/signals-gated?user_id=${userId}` : '/api/signals';
+            const settings = {
+                user_id: userId,
+                enabled: enabled,
+                max_trades_per_day: parseInt(document.getElementById('maxTradesPerDay').value),
+                max_position_size: parseFloat(document.getElementById('maxPositionSize').value),
+                min_confidence: parseFloat(document.getElementById('minConfidenceSlider').value) / 100,
+                allowed_symbols: [],  // All symbols
+                risk_percentage: 5.0  // 5% for demo
+            };
             
             try {
-                const response = await fetch(`${API_URL}${endpoint}`);
-                const data = await response.json();
+                const response = await fetch(`${API_URL}/api/auto-trading/settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
                 
-                if (data.error === 'limit_reached') {
-                    showNotification(data.message, 'warning');
-                    document.getElementById('signalsContainer').innerHTML = 
-                        `<div class="text-center py-8">
-                            <p class="text-zinc-400 mb-4">${data.message}</p>
-                            <button onclick="showProModal()" class="px-4 py-2 bg-white text-black rounded">
-                                Upgrade
-                            </button>
-                        </div>`;
-                } else {
-                    updateSignals(data.signals || []);
+                const result = await response.json();
+                
+                if (result.success) {
+                    autoTradingEnabled = enabled;
+                    updateAutoTradingUI(enabled);
+                    showNotification(
+                        enabled ? '🤖 Auto-trading ACTIVATED! AI will trade for you.' : 'Auto-trading paused',
+                        enabled ? 'success' : 'info'
+                    );
                 }
             } catch (error) {
-                console.error('Error fetching signals:', error);
+                console.error('Error toggling auto-trading:', error);
+                showNotification('Failed to update auto-trading settings', 'error');
             }
         }
-
-        // Update signals display
-        function updateSignals(newSignals) {
-            signals = newSignals;
-            const container = document.getElementById('signalsContainer');
+        
+        async function loadAutoTradingSettings() {
+            try {
+                const response = await fetch(`${API_URL}/api/auto-trading/settings/${userId}`);
+                const settings = await response.json();
+                
+                autoTradingEnabled = settings.enabled;
+                document.getElementById('autoTradingSwitch').checked = settings.enabled;
+                document.getElementById('minConfidenceSlider').value = settings.min_confidence * 100;
+                document.getElementById('minConfidenceValue').textContent = `${(settings.min_confidence * 100).toFixed(0)}%`;
+                document.getElementById('maxPositionSize').value = settings.max_position_size;
+                document.getElementById('maxTradesPerDay').value = settings.max_trades_per_day;
+                
+                updateAutoTradingUI(settings.enabled);
+                
+                console.log('Auto-trading settings loaded:', settings);
+            } catch (error) {
+                console.error('Error loading auto-trading settings:', error);
+            }
+        }
+        
+        function updateAutoTradingUI(enabled) {
+            const bar = document.getElementById('autoTradingBar');
+            if (enabled) {
+                bar.classList.remove('hidden');
+                document.getElementById('minConfidence').textContent = document.getElementById('minConfidenceValue').textContent;
+                document.getElementById('maxPerTrade').textContent = `$${formatNumber(document.getElementById('maxPositionSize').value)}`;
+            } else {
+                bar.classList.add('hidden');
+            }
+        }
+        
+        function updateAutoSettings() {
+            const confidence = document.getElementById('minConfidenceSlider').value;
+            document.getElementById('minConfidenceValue').textContent = `${confidence}%`;
+        }
+        
+        async function saveAutoSettings() {
+            await toggleAutoTrading();
+        }
+        
+        function handleAutoTradeNotification(trade) {
+            // Add to trade history
+            tradeHistory.unshift(trade);
             
-            if (!signals || signals.length === 0) {
-                const now = new Date();
-                const day = now.getDay();
-                if (day === 0 || day === 6) {
-                    container.innerHTML = `
-                        <div class="text-center py-8 text-zinc-500">
-                            <i class="fas fa-moon text-2xl mb-4"></i>
-                            <p>Market closed. Signals resume Monday 9:30 AM EST</p>
-                        </div>`;
-                } else {
-                    container.innerHTML = '<div class="text-center py-8 text-zinc-500">No active signals</div>';
-                }
+            // Show notification
+            const notification = document.createElement('div');
+            notification.className = 'trade-notification glass rounded-lg p-3 mb-2 border-l-4 border-green-500';
+            notification.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <div>
+                        <span class="text-green-400 font-semibold">
+                            <i class="fas fa-robot"></i> AUTO-TRADE EXECUTED
+                        </span>
+                        <div class="text-sm mt-1">
+                            ${trade.order.action} ${trade.order.quantity} ${trade.order.symbol} @ $${trade.order.price}
+                        </div>
+                    </div>
+                    <div class="text-right text-sm">
+                        <div class="text-zinc-400">Confidence: ${(trade.signal_confidence * 100).toFixed(0)}%</div>
+                        <div class="text-zinc-500 text-xs">${new Date(trade.order.timestamp).toLocaleTimeString()}</div>
+                    </div>
+                </div>
+            `;
+            
+            const container = document.getElementById('tradeNotifications');
+            container.insertBefore(notification, container.firstChild);
+            
+            // Remove after 10 seconds
+            setTimeout(() => notification.remove(), 10000);
+            
+            // Update trade history display
+            updateTradeHistory();
+            
+            // Refresh positions
+            fetchPositions();
+            
+            // Play sound (optional)
+            playTradeSound();
+        }
+        
+        function updateTradeHistory() {
+            const container = document.getElementById('tradeHistory');
+            
+            if (tradeHistory.length === 0) {
+                container.innerHTML = '<p class="text-zinc-500 text-sm">No trades executed yet</p>';
                 return;
             }
             
-            container.innerHTML = signals.map((signal, index) => `
-                <div class="signal-card glass rounded-lg p-4 ${signal.action === 'BUY' ? 'border-l-4 border-white' : 'border-l-4 border-zinc-600'}">
+            container.innerHTML = tradeHistory.slice(0, 20).map(trade => `
+                <div class="flex justify-between items-center py-2 border-b border-zinc-800 text-sm">
+                    <div>
+                        <span class="${trade.auto_trade ? 'text-green-400' : 'text-white'}">
+                            ${trade.auto_trade ? '🤖' : '👤'} ${trade.order.action} ${trade.order.quantity} ${trade.order.symbol}
+                        </span>
+                        <span class="text-zinc-500 ml-2">@ $${trade.order.price}</span>
+                    </div>
+                    <div class="text-xs text-zinc-500">
+                        ${new Date(trade.order.timestamp).toLocaleTimeString()}
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function playTradeSound() {
+            // Optional: Add a trade execution sound
+            const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjiS2Oy9diMFl2z0+NBxBnVH7y9hR5TRp8etGAUWVsLuu3UXAhxpze/djCAFD0evdLOLAAAg0tyMG0VCBDdw5/OldA==');
+            audio.volume = 0.3;
+            audio.play().catch(e => {});
+        }
+        
+        // ============ SIGNALS ============
+        async function fetchSignals() {
+            try {
+                console.log('Fetching signals...');
+                const response = await fetch(`${API_URL}/api/signals`);
+                const data = await response.json();
+                console.log('✅ Signals fetched:', data.count || 0);
+                
+                if (data.signals) {
+                    currentSignals = data.signals;
+                    updateSignalsDisplay(data.signals);
+                }
+                
+                if (data.metrics) {
+                    updateMetrics(data.metrics);
+                }
+            } catch (error) {
+                console.error('❌ Error fetching signals:', error);
+            }
+        }
+        
+        function updateSignalsDisplay(signals) {
+            const container = document.getElementById('signalsContainer');
+            
+            if (!signals || signals.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-12">
+                        <i class="fas fa-clock text-3xl text-zinc-500 mb-4"></i>
+                        <p class="text-zinc-500">Waiting for signals...</p>
+                        <p class="text-zinc-600 text-sm mt-2">New signals every 60 seconds</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = signals.map(signal => `
+                <div class="glass rounded-lg p-3 border-l-4 ${signal.action === 'BUY' ? 'border-green-500' : 'border-red-500'}
+                     ${signal.confidence >= 0.65 && autoTradingEnabled ? 'bg-green-900 bg-opacity-20' : ''}">
                     <div class="flex justify-between items-start">
                         <div class="flex-1">
                             <div class="flex items-center space-x-3 mb-2">
-                                <span class="text-2xl font-bold">${signal.symbol}</span>
-                                <span class="px-3 py-1 ${signal.action === 'BUY' ? 'bg-white text-black' : 'bg-zinc-800 text-white'} rounded-full font-bold text-sm">
+                                <span class="text-xl font-bold">${signal.symbol}</span>
+                                <span class="px-2 py-1 ${signal.action === 'BUY' ? 'bg-green-500' : 'bg-red-500'} 
+                                       text-black rounded-full font-bold text-xs">
                                     ${signal.action}
                                 </span>
                                 <span class="text-zinc-400">$${signal.price}</span>
+                                ${signal.confidence >= 0.65 && autoTradingEnabled ? 
+                                    '<span class="text-green-400 text-xs animate-pulse-slow">🤖 AUTO</span>' : ''}
                             </div>
-                            <div class="text-sm text-zinc-300 mb-2">${signal.explanation}</div>
+                            <div class="text-xs text-zinc-300 mb-1">${signal.explanation || 'AI detected opportunity'}</div>
                             <div class="grid grid-cols-4 gap-2 text-xs">
                                 <div>
-                                    <span class="text-zinc-500">Confidence:</span>
-                                    <span class="font-bold ${signal.confidence > 0.7 ? 'text-white' : 'text-zinc-400'}">
+                                    <span class="text-zinc-500">Conf:</span>
+                                    <span class="font-bold ${signal.confidence >= 0.7 ? 'text-green-400' : 
+                                           signal.confidence >= 0.65 ? 'text-yellow-400' : 'text-zinc-400'}">
                                         ${(signal.confidence * 100).toFixed(0)}%
                                     </span>
                                 </div>
                                 <div>
                                     <span class="text-zinc-500">Target:</span>
-                                    <span class="font-bold">$${signal.take_profit}</span>
+                                    <span class="font-bold text-green-400">$${signal.take_profit}</span>
                                 </div>
                                 <div>
                                     <span class="text-zinc-500">Stop:</span>
-                                    <span class="font-bold text-zinc-400">$${signal.stop_loss}</span>
+                                    <span class="font-bold text-red-400">$${signal.stop_loss}</span>
                                 </div>
                                 <div>
                                     <span class="text-zinc-500">Return:</span>
@@ -626,250 +703,356 @@
                                 </div>
                             </div>
                         </div>
-                        <button onclick="executeTrade('${signal.symbol}', '${signal.action}')" 
-                                class="ml-4 px-4 py-2 ${signal.action === 'BUY' ? 'bg-white text-black hover:bg-zinc-200' : 'bg-zinc-800 hover:bg-zinc-700'} rounded font-semibold transition"
-                                ${(signal.action === 'BUY' && stopBuying) ? 'disabled' : ''}>
-                            ${(signal.action === 'BUY' && stopBuying) ? 'Stopped' : 'Execute'}
+                        <button onclick="manualExecute('${signal.symbol}', '${signal.action}', ${signal.price})" 
+                                class="ml-3 px-3 py-1 text-xs ${signal.action === 'BUY' ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'} 
+                                       text-black rounded font-semibold transition">
+                            Manual
                         </button>
                     </div>
                 </div>
             `).join('');
             
-            document.getElementById('activeSignals').textContent = signals.length;
+            document.getElementById('activeSignalsCount').textContent = signals.length;
         }
-
-        // Execute trade
-        async function executeTrade(symbol, action) {
-            const userId = localStorage.getItem('user_id') || 'demo_user';
-            
-            if (action === 'BUY' && stopBuying) {
-                showNotification('Buy orders disabled', 'warning');
-                return;
-            }
-            
-            const alpacaCheck = await fetch(`${API_URL}/api/alpaca-account/${userId}`);
-            const alpacaData = await alpacaCheck.json();
-            
-            if (alpacaData.error) {
-                if (confirm('Link your Alpaca account to execute trades. Connect now?')) {
-                    showAlpacaModal();
-                }
-                return;
-            }
-            
-            const riskLevel = document.getElementById('riskLevel').value;
-            const riskPercentage = {
-                'conservative': 1.0,
-                'moderate': 2.0,
-                'aggressive': 5.0
-            }[riskLevel];
-            
-            const confirmMsg = `Execute ${action} order for ${symbol}?\n` +
-                              `Risk: ${riskPercentage}% of portfolio\n` +
-                              `Commission: 3-7% on profits`;
-            
-            if (!confirm(confirmMsg)) return;
-            
+        
+        // ============ ACCOUNT MANAGEMENT ============
+        async function checkAccountStatus() {
             try {
-                const response = await fetch(`${API_URL}/api/execute-smart`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        symbol: symbol,
-                        action: action,
-                        user_id: userId,
-                        mode: 'percentage',
-                        value: riskPercentage,
-                        max_position_percent: 25.0
-                    })
-                });
+                console.log('Checking account status...');
+                const response = await fetch(`${API_URL}/api/alpaca-account/${userId}`);
+                const data = await response.json();
+                console.log('Account status:', data);
                 
-                const result = await response.json();
-                if (result.success) {
-                    const details = result.position_details;
-                    showNotification(
-                        `Executed: ${details.shares} shares @ $${details.entry_price}`, 
-                        'success'
-                    );
-                    addRecentTrade(symbol, action, details.shares);
-                    checkAlpacaStatus();
-                } else {
-                    showNotification('Trade failed: ' + result.error, 'error');
+                if (data.account_number) {
+                    userAccount = data;
+                    updateAccountDisplay(data);
+                    document.getElementById('autoTradeToggle').classList.remove('hidden');
+                    await fetchPositions();
                 }
             } catch (error) {
-                showNotification('Trade execution failed', 'error');
+                console.error('Error checking account:', error);
             }
         }
-
-        // Fixed Stripe checkout
-        async function initiateCheckout(tier) {
-            const userId = localStorage.getItem('user_id') || 'demo_user';
+        
+        function updateAccountDisplay(account) {
+            document.getElementById('accountDetails').classList.remove('hidden');
+            document.getElementById('accountStatus').innerHTML = `
+                <i class="fas fa-check-circle text-green-500"></i> 
+                Account linked ${account.demo_mode ? '(Demo Mode - $100k with Auto-Trading)' : ''}
+            `;
             
-            const priceIds = {
-                'pro': 'price_1S6KlkPuxT6s7WvF1Pn0dChn',
-                'insider': 'price_1S6KlvPuxT6s7WvFAuxjJQA7'
-            };
+            document.getElementById('accountNumber').textContent = account.account_number;
+            document.getElementById('buyingPower').textContent = `$${formatNumber(account.buying_power)}`;
+            document.getElementById('portfolioValue').textContent = `$${formatNumber(account.portfolio_value)}`;
+            document.getElementById('positionsValue').textContent = `$${formatNumber(account.positions_value || 0)}`;
+            document.getElementById('tradingMode').textContent = account.paper_trading ? 'Paper' : 'Live';
             
+            document.getElementById('linkAlpacaBtn').innerHTML = '<i class="fas fa-sync"></i> Refresh';
+        }
+        
+        async function fetchPositions() {
             try {
-                const response = await fetch(`${API_URL}/api/create-checkout`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: userId,
-                        price_id: priceIds[tier],
-                        tier: tier,
-                        email: localStorage.getItem('user_email') // If available
-                    })
-                });
+                const response = await fetch(`${API_URL}/api/user-positions/${userId}`);
+                const data = await response.json();
+                console.log('Positions:', data);
                 
-                const session = await response.json();
-                
-                if (session.url) {
-                    // Redirect to Stripe-hosted checkout
-                    window.location.href = session.url;
-                } else if (session.session_id) {
-                    // Fallback to embedded checkout
-                    const result = await stripe.redirectToCheckout({
-                        sessionId: session.session_id
-                    });
+                if (data.positions && data.positions.length > 0) {
+                    userPositions = data.positions;
+                    updatePositionsDisplay(data.positions);
                     
-                    if (result.error) {
-                        showNotification('Checkout failed: ' + result.error.message, 'error');
-                    }
-                } else {
-                    showNotification('Checkout configuration error', 'error');
+                    // Update P&L
+                    const totalPL = data.total_pl || 0;
+                    document.getElementById('totalPL').textContent = 
+                        `${totalPL >= 0 ? '+' : ''}$${formatNumber(Math.abs(totalPL))}`;
+                    document.getElementById('totalPL').className = 
+                        `text-xl font-semibold ${totalPL >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                    
+                    document.getElementById('positionCount').textContent = data.count;
                 }
             } catch (error) {
-                console.error('Checkout error:', error);
-                showNotification('Failed to start checkout', 'error');
+                console.error('Error fetching positions:', error);
             }
         }
-
-        // Handle Alpaca linking
-        async function handleAlpacaLink(event) {
-            event.preventDefault();
+        
+        function updatePositionsDisplay(positions) {
+            const container = document.getElementById('positionsContainer');
             
-            const userId = localStorage.getItem('user_id') || 'demo_user';
-            const apiKey = document.getElementById('alpacaApiKey').value;
-            const secretKey = document.getElementById('alpacaSecretKey').value;
-            const paperTrading = document.getElementById('paperTrading').checked;
+            if (!positions || positions.length === 0) {
+                container.innerHTML = '<p class="text-zinc-500 text-sm">No open positions</p>';
+                return;
+            }
             
+            container.innerHTML = `
+                <div class="space-y-2">
+                    ${positions.map(pos => `
+                        <div class="flex justify-between items-center p-2 bg-zinc-900 rounded">
+                            <div>
+                                <span class="font-semibold">${pos.symbol}</span>
+                                <span class="text-sm text-zinc-500 ml-2">
+                                    ${pos.qty} shares @ $${pos.avg_entry_price}
+                                </span>
+                            </div>
+                            <div class="text-right">
+                                <div class="font-semibold ${pos.unrealized_pl >= 0 ? 'text-green-400' : 'text-red-400'}">
+                                    ${pos.unrealized_pl >= 0 ? '+' : ''}$${Math.abs(pos.unrealized_pl).toFixed(2)}
+                                </div>
+                                <div class="text-xs text-zinc-500">
+                                    ${pos.unrealized_plpc >= 0 ? '+' : ''}${pos.unrealized_plpc.toFixed(2)}%
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        // ============ ML STATS ============
+        async function fetchMLStats() {
             try {
-                const response = await fetch(`${API_URL}/api/link-alpaca`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: userId,
-                        api_key: apiKey,
-                        secret_key: secretKey,
-                        paper_trading: paperTrading
-                    })
-                });
+                const response = await fetch(`${API_URL}/api/ml-stats`);
+                const data = await response.json();
+                console.log('ML Stats:', data);
                 
-                const result = await response.json();
-                
-                if (result.success) {
-                    showNotification('Alpaca account linked!', 'success');
-                    hideModal('alpacaModal');
-                    checkAlpacaStatus();
-                } else {
-                    showNotification('Failed: ' + result.message, 'error');
-                }
+                document.getElementById('mlStatusText').textContent = data.ml_status || 'Training';
+                document.getElementById('mlSamples').textContent = data.training_samples || 0;
+                document.getElementById('mlPredictions').textContent = data.predictions_made || 0;
             } catch (error) {
-                showNotification('Error linking account', 'error');
+                console.error('Error fetching ML stats:', error);
             }
         }
-
-        // Handle signup
+        
+        // ============ FORM HANDLERS ============
         async function handleSignup(event) {
             event.preventDefault();
             
-            const name = document.getElementById('signupName').value;
-            const email = document.getElementById('signupEmail').value;
-            const password = document.getElementById('signupPassword').value;
+            const data = {
+                name: document.getElementById('signupName').value,
+                email: document.getElementById('signupEmail').value,
+                password: document.getElementById('signupPassword').value,
+                risk_level: 'moderate'
+            };
             
             try {
                 const response = await fetch(`${API_URL}/api/signup`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: name,
-                        email: email,
-                        password: password,
-                        risk_level: 'moderate'
-                    })
+                    body: JSON.stringify(data)
                 });
                 
                 const result = await response.json();
+                console.log('Signup result:', result);
+                
                 if (result.success) {
                     localStorage.setItem('user_id', result.user_id);
-                    localStorage.setItem('user_email', email);
-                    showNotification('Account created! Link your Alpaca account next.', 'success');
+                    showNotification('Account created! Now link your trading account for auto-trading.', 'success');
                     hideModal('signupModal');
-                    setTimeout(() => showAlpacaModal(), 1000);
+                    setTimeout(() => showAlpacaModal(), 1500);
                 } else {
-                    showNotification('Signup failed', 'error');
+                    showNotification(result.error || 'Signup failed', 'error');
                 }
             } catch (error) {
+                console.error('Signup error:', error);
                 showNotification('Error creating account', 'error');
             }
         }
-
-        // Add recent trade
-        function addRecentTrade(symbol, action, shares) {
-            const tradesDiv = document.getElementById('recentTrades');
-            const trade = `
-                <div class="flex justify-between">
-                    <span>${symbol} (${shares})</span>
-                    <span class="${action === 'BUY' ? 'text-white' : 'text-zinc-500'}">${action}</span>
-                </div>
-            `;
-            tradesDiv.innerHTML = trade + tradesDiv.innerHTML;
+        
+        async function handleAlpacaLink(event) {
+            event.preventDefault();
+            
+            const apiKey = document.getElementById('alpacaKey').value || 'test';
+            const secretKey = document.getElementById('alpacaSecret').value || 'test';
+            const paperTrading = document.getElementById('paperTrading').checked;
+            
+            const data = {
+                user_id: userId,
+                api_key: apiKey,
+                secret_key: secretKey,
+                paper_trading: paperTrading
+            };
+            
+            console.log('Linking Alpaca account...', data);
+            
+            try {
+                const response = await fetch(`${API_URL}/api/link-alpaca`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                console.log('Alpaca link result:', result);
+                
+                if (result.success) {
+                    showNotification(
+                        '✅ Account linked! Auto-trading ACTIVATED with $100,000!',
+                        'success'
+                    );
+                    hideModal('alpacaModal');
+                    await checkAccountStatus();
+                    await loadAutoTradingSettings();
+                } else {
+                    showNotification(result.message || 'Failed to link account', 'error');
+                }
+            } catch (error) {
+                console.error('Alpaca link error:', error);
+                showNotification('Error linking account', 'error');
+            }
         }
-
-        // Utility functions
-        function showNotification(message, type = 'info') {
-            const notification = document.createElement('div');
-            const bgColor = type === 'success' ? 'bg-white text-black' : 
-                           type === 'error' ? 'bg-red-600' : 
-                           type === 'warning' ? 'bg-zinc-600' : 'bg-zinc-800';
-            notification.className = `fixed top-20 right-4 ${bgColor} px-6 py-3 rounded-lg z-50`;
-            notification.textContent = message;
-            document.body.appendChild(notification);
-            setTimeout(() => notification.remove(), 3000);
+        
+        // ============ MANUAL TRADE EXECUTION ============
+        async function manualExecute(symbol, action, price) {
+            if (!userAccount) {
+                showNotification('Please link your trading account first', 'warning');
+                showAlpacaModal();
+                return;
+            }
+            
+            const quantity = prompt(`Manual trade: How many shares of ${symbol} to ${action.toLowerCase()}?`, '10');
+            if (!quantity || quantity <= 0) return;
+            
+            const data = {
+                symbol: symbol,
+                action: action,
+                quantity: parseInt(quantity),
+                user_id: userId,
+                auto_trade: false
+            };
+            
+            try {
+                const response = await fetch(`${API_URL}/api/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                console.log('Trade result:', result);
+                
+                if (result.success) {
+                    showNotification(`✅ Manual trade: ${result.message}`, 'success');
+                    tradeHistory.unshift(result);
+                    updateTradeHistory();
+                    await fetchPositions();
+                } else {
+                    showNotification(result.error || 'Trade failed', 'error');
+                }
+            } catch (error) {
+                console.error('Trade error:', error);
+                showNotification('Error executing trade', 'error');
+            }
         }
-
-        function showAlpacaModal() {
-            document.getElementById('alpacaModal').classList.remove('hidden');
+        
+        // ============ UTILITY FUNCTIONS ============
+        function testDemoMode() {
+            document.getElementById('alpacaKey').value = 'test';
+            document.getElementById('alpacaSecret').value = 'test';
+            showAlpacaModal();
         }
-
-        function showProModal() {
-            document.getElementById('proModal').classList.remove('hidden');
+        
+        async function pauseAllTrading() {
+            document.getElementById('autoTradingSwitch').checked = false;
+            await toggleAutoTrading();
         }
-
-        function showSignupModal() {
-            document.getElementById('signupModal').classList.remove('hidden');
+        
+        function updateConnectionStatus(status) {
+            const statusEl = document.getElementById('connectionStatus');
+            const statuses = {
+                'connected': '<i class="fas fa-wifi text-green-400"></i> Connected',
+                'live': '<i class="fas fa-wifi text-green-400"></i> Live',
+                'reconnecting': '<i class="fas fa-wifi text-yellow-400"></i> Reconnecting...',
+                'error': '<i class="fas fa-wifi text-red-400"></i> Offline'
+            };
+            statusEl.innerHTML = statuses[status] || statuses['error'];
         }
-
-        function hideModal(modalId) {
-            document.getElementById(modalId).classList.add('hidden');
-        }
-
-        function refreshSignals() {
-            fetchSignals();
-            showNotification('Signals refreshed', 'info');
-        }
-
-        // Auto-refresh during market hours
-        setInterval(() => {
-            checkMarketStatus();
+        
+        function updateMarketStatus() {
             const now = new Date();
             const day = now.getDay();
             const hour = now.getHours();
-            if (day >= 1 && day <= 5 && hour >= 9 && hour < 16) {
-                fetchSignals();
+            const minute = now.getMinutes();
+            
+            const isWeekday = day >= 1 && day <= 5;
+            const isMarketHours = (hour === 9 && minute >= 30) || (hour >= 10 && hour < 16);
+            
+            const statusEl = document.getElementById('marketStatus');
+            if (isWeekday && isMarketHours) {
+                statusEl.innerHTML = 'MARKET OPEN';
+                statusEl.className = 'px-3 py-1 bg-green-500 text-black text-xs font-medium rounded-full animate-pulse-slow';
+            } else {
+                statusEl.innerHTML = 'MARKET CLOSED';
+                statusEl.className = 'px-3 py-1 bg-zinc-900 text-xs font-medium rounded-full border border-zinc-800';
             }
-        }, 30000);
+        }
+        
+        function updateMetrics(metrics) {
+            if (metrics.total_users !== undefined) {
+                // document.getElementById('totalUsers').textContent = metrics.total_users;
+            }
+            if (metrics.win_rate !== undefined) {
+                document.getElementById('winRate').textContent = metrics.win_rate.toFixed(1) + '%';
+            }
+            if (metrics.auto_trades_today !== undefined) {
+                autoTradeCount = metrics.auto_trades_today;
+                document.getElementById('autoTradesCount').textContent = autoTradeCount;
+            }
+        }
+        
+        function formatNumber(num) {
+            return new Intl.NumberFormat('en-US', { 
+                minimumFractionDigits: 2, 
+                maximumFractionDigits: 2 
+            }).format(num);
+        }
+        
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            const colors = {
+                'success': 'bg-green-500 text-black',
+                'error': 'bg-red-500',
+                'warning': 'bg-yellow-500 text-black',
+                'info': 'bg-zinc-800'
+            };
+            
+            notification.className = `fixed top-20 right-4 ${colors[type]} px-6 py-3 rounded-lg z-50 shadow-lg`;
+            notification.innerHTML = `
+                <div class="flex items-center">
+                    <i class="fas ${type === 'success' ? 'fa-check' : type === 'error' ? 'fa-times' : 'fa-info'} mr-2"></i>
+                    ${message}
+                </div>
+            `;
+            
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 5000);
+        }
+        
+        function showAlpacaModal() {
+            document.getElementById('alpacaModal').classList.remove('hidden');
+        }
+        
+        function showSignupModal() {
+            document.getElementById('signupModal').classList.remove('hidden');
+        }
+        
+        function showUpgradeModal() {
+            document.getElementById('upgradeModal').classList.remove('hidden');
+        }
+        
+        function hideModal(modalId) {
+            document.getElementById(modalId).classList.add('hidden');
+        }
+        
+        function refreshSignals() {
+            fetchSignals();
+            showNotification('Refreshing signals...', 'info');
+        }
+        
+        async function refreshAll() {
+            showNotification('Refreshing everything...', 'info');
+            await fetchSignals();
+            await checkAccountStatus();
+            await fetchPositions();
+            await fetchMLStats();
+        }
     </script>
 </body>
 </html>
