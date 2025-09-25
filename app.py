@@ -52,6 +52,30 @@ app.add_middleware(
 # CONFIGURATION
 # ============================================
 
+# High volatility trading zones - AI advantage periods
+VOLATILITY_ZONES = {
+    "opening_bell": {"start": "09:30", "end": "10:00", "multiplier": 1.8, "threshold": 0.5},
+    "morning_reversal": {"start": "10:00", "end": "10:30", "multiplier": 1.3, "threshold": 0.6},
+    "lunch_dip": {"start": "11:30", "end": "12:30", "multiplier": 1.1, "threshold": 0.7},
+    "power_hour": {"start": "15:00", "end": "15:50", "multiplier": 1.5, "threshold": 0.55},
+    "closing_cross": {"start": "15:50", "end": "16:00", "multiplier": 2.0, "threshold": 0.45}
+}
+
+def get_volatility_multiplier() -> tuple:
+    """Get multiplier and threshold for current time - higher aggression during volatile periods"""
+    try:
+        et = pytz.timezone('US/Eastern')
+        now = datetime.now(et)
+        current_time = now.strftime("%H:%M")
+        
+        for zone, config in VOLATILITY_ZONES.items():
+            if config["start"] <= current_time <= config["end"]:
+                logger.info(f"🔥 {zone.upper()} ACTIVE - {config['multiplier']}x signals, threshold: {config['threshold']}")
+                return config["multiplier"], config["threshold"]
+        return 1.0, 0.75  # Default values
+    except:
+        return 1.0, 0.75
+
 # Trading parameters - reduced universe for stability
 STOCK_UNIVERSE = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", 
@@ -354,6 +378,140 @@ class RiskManagedPortfolio:
             return self.cash
 
 # ============================================
+# POSITION EXIT MANAGEMENT
+# ============================================
+
+class PositionExitManager:
+    """Manages aggressive exits during volatile periods"""
+    
+    def __init__(self, portfolio: RiskManagedPortfolio):
+        self.portfolio = portfolio
+        self.exit_queue = deque()
+        self.volatility_entries = {}  # Track which positions entered during volatility
+        
+    async def check_exits(self) -> List[Dict]:
+        """Check all positions for exit conditions"""
+        exits_executed = []
+        volatility_mult, _ = get_volatility_multiplier()
+        
+        for symbol, position in list(self.portfolio.positions.items()):
+            try:
+                # Get current price
+                ticker = yf.Ticker(symbol)
+                current_price = ticker.info.get('currentPrice', position['current_price'])
+                
+                # Calculate P&L
+                entry_price = position['avg_price']
+                pnl_percent = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+                
+                # EXIT CONDITIONS
+                exit_reason = None
+                
+                # 1. VOLATILE ZONE EXIT - Tighter stops during volatility
+                if volatility_mult > 1.0:
+                    # Tighter stop loss during volatility
+                    vol_stop_loss = -1.5 / volatility_mult  # -0.75% at 2x volatility
+                    if pnl_percent <= vol_stop_loss:
+                        exit_reason = f"VOLATILE_STOP_{vol_stop_loss:.1f}%"
+                    
+                    # Quick profit taking during volatility
+                    vol_take_profit = 2.0 / volatility_mult  # 1% at 2x volatility
+                    if pnl_percent >= vol_take_profit:
+                        exit_reason = f"VOLATILE_PROFIT_{vol_take_profit:.1f}%"
+                
+                # 2. TIME-BASED EXIT - Close positions before volatility ends
+                et = pytz.timezone('US/Eastern')
+                now = datetime.now(et)
+                current_time = now.strftime("%H:%M")
+                
+                # Exit before volatile period ends
+                if symbol in self.volatility_entries:
+                    entry_zone = self.volatility_entries[symbol]
+                    if entry_zone == "opening_bell" and current_time >= "09:55":
+                        exit_reason = "ZONE_END_OPENING"
+                    elif entry_zone == "power_hour" and current_time >= "15:45":
+                        exit_reason = "ZONE_END_POWER"
+                    elif entry_zone == "closing_cross" and current_time >= "15:58":
+                        exit_reason = "ZONE_END_CLOSE"
+                
+                # 3. END OF DAY LIQUIDATION - Don't hold overnight
+                if current_time >= "15:55" and current_time <= "16:00":
+                    exit_reason = "END_OF_DAY_LIQUIDATION"
+                
+                # 4. NORMAL EXITS
+                if not exit_reason:
+                    # Standard stop loss
+                    if current_price <= position.get('stop_loss', 0):
+                        exit_reason = "STOP_LOSS"
+                    # Standard take profit
+                    elif current_price >= position.get('take_profit', float('inf')):
+                        exit_reason = "TAKE_PROFIT"
+                    # Trailing stop (2% from peak during normal times)
+                    elif pnl_percent >= 3 and pnl_percent < (position.get('peak_pnl', pnl_percent) - 2):
+                        exit_reason = "TRAILING_STOP"
+                
+                # 5. EMERGENCY LIQUIDATION
+                # If losing more than 5% or portfolio down 10%
+                if pnl_percent <= -5:
+                    exit_reason = "EMERGENCY_STOP"
+                elif self.portfolio.get_total_value() < self.portfolio.initial_capital * 0.9:
+                    exit_reason = "PORTFOLIO_PROTECTION"
+                
+                # Execute exit if triggered
+                if exit_reason:
+                    exit_signal = EnhancedSignal(
+                        symbol=symbol,
+                        action="SELL",
+                        price=current_price,
+                        confidence=0.99,  # High confidence for exits
+                        ml_confidence=0.99,
+                        ensemble_score=0.99,
+                        risk_score=0.1,
+                        strategy="exit_manager",
+                        ml_strategy=exit_reason,
+                        explanation=f"AUTO EXIT: {exit_reason} (P&L: {pnl_percent:.2f}%)",
+                        technical_indicators={},
+                        market_regime="exit",
+                        edge_score=1.0,
+                        expected_return=0,
+                        sharpe_ratio=0,
+                        stop_loss=0,
+                        take_profit=0,
+                        position_size=position['qty'],
+                        timestamp=datetime.now().isoformat(),
+                        execution_priority=10
+                    )
+                    
+                    result = self.portfolio.execute_trade(exit_signal)
+                    if result['success']:
+                        exits_executed.append({
+                            'symbol': symbol,
+                            'reason': exit_reason,
+                            'pnl_percent': pnl_percent,
+                            'exit_price': current_price
+                        })
+                        
+                        # Remove from volatility tracking
+                        if symbol in self.volatility_entries:
+                            del self.volatility_entries[symbol]
+                        
+                        logger.warning(f"🚪 EXIT: {symbol} - {exit_reason} @ ${current_price:.2f} (P&L: {pnl_percent:.2f}%)")
+                
+                # Update peak P&L for trailing stop
+                position['peak_pnl'] = max(position.get('peak_pnl', 0), pnl_percent)
+                position['current_price'] = current_price
+                
+            except Exception as e:
+                logger.error(f"Exit check error for {symbol}: {e}")
+                continue
+        
+        return exits_executed
+    
+    def mark_volatility_entry(self, symbol: str, zone: str):
+        """Mark position as entered during volatility zone"""
+        self.volatility_entries[symbol] = zone
+
+# ============================================
 # MARKET REGIME DETECTION
 # ============================================
 
@@ -457,14 +615,19 @@ class AdvancedSignalGenerator:
         self.regime_detector = MarketRegimeDetector()
         self.edge_optimizer = EdgeOptimizer()
         self.signal_history = deque(maxlen=1000)
+        self.exit_manager = PositionExitManager(self.portfolio)  # Add exit manager
         
     async def generate_enhanced_signal(self, symbol: str) -> Optional[EnhancedSignal]:
         """Generate signal with ML enhancement and edge optimization"""
         
-        # Check cache first
+        # Get volatility multiplier for current time
+        volatility_mult, _ = get_volatility_multiplier()
+        
+        # Check cache first (shorter TTL during volatile periods)
+        cache_ttl = EDGE_CONFIG["cache_ttl"] / volatility_mult
         cache_key = f"signal_{symbol}_{datetime.now().minute}"
         cached = self.edge_optimizer.get_cached_data(cache_key)
-        if cached:
+        if cached and volatility_mult <= 1.0:  # Don't use cache during volatile periods
             return cached
         
         # Get market data with retry logic
@@ -499,6 +662,16 @@ class AdvancedSignalGenerator:
             if signal:
                 # Calculate edge score
                 signal.edge_score = self.calculate_edge_score(signal, hist)
+                
+                # VOLATILITY BOOST - Capitalize on high volatility periods
+                volatility_mult, _ = get_volatility_multiplier()
+                if volatility_mult > 1.0:
+                    # Boost confidence and edge during volatile periods
+                    signal.confidence = min(0.95, signal.confidence * volatility_mult)
+                    signal.edge_score = min(1.0, signal.edge_score * volatility_mult)
+                    signal.execution_priority = min(10, int(signal.execution_priority * 1.3))
+                    signal.explanation += f" [VOLATILE ZONE: {volatility_mult}x]"
+                    logger.info(f"📈 Volatility boost applied to {symbol}: conf={signal.confidence:.2f}")
                 
                 # Set position size
                 signal.position_size = self.portfolio.calculate_position_size(signal)
@@ -723,10 +896,20 @@ class AdvancedSignalGenerator:
             return 5
     
     async def scan_universe(self) -> List[EnhancedSignal]:
-        """Scan entire universe for signals"""
+        """Scan entire universe for signals with volatility awareness"""
         signals = []
         
-        for symbol in STOCK_UNIVERSE:
+        # Get current volatility state
+        volatility_mult, _ = get_volatility_multiplier()
+        
+        # Scan more stocks during volatile periods
+        stocks_to_scan = STOCK_UNIVERSE
+        if volatility_mult >= 1.5:
+            # Add high-beta stocks during volatile periods for more opportunity
+            high_beta_stocks = ["AMD", "ROKU", "SQ", "COIN", "PLTR"]
+            stocks_to_scan = STOCK_UNIVERSE + high_beta_stocks
+        
+        for symbol in stocks_to_scan:
             try:
                 signal = await self.generate_enhanced_signal(symbol)
                 if signal:
@@ -738,7 +921,13 @@ class AdvancedSignalGenerator:
         # Sort by priority
         signals.sort(key=lambda x: x.execution_priority, reverse=True)
         
-        return signals[:5]  # Top 5 signals
+        # Return more signals during volatile periods
+        if volatility_mult >= 1.5:
+            return signals[:10]  # Top 10 during high volatility
+        elif volatility_mult > 1.0:
+            return signals[:7]   # Top 7 during medium volatility
+        else:
+            return signals[:5]   # Top 5 normally
 
 # ============================================
 # GLOBAL INSTANCES
@@ -775,12 +964,19 @@ def is_market_open() -> bool:
 
 @app.get("/")
 async def root():
+    volatility_mult, threshold = get_volatility_multiplier()
     return {
         "platform": "Photon AI Edge Trading Platform",
         "version": "2.0.0",
         "status": "operational",
         "market_open": is_market_open(),
-        "portfolio_value": signal_generator.portfolio.get_total_value()
+        "portfolio_value": signal_generator.portfolio.get_total_value(),
+        "volatility_trading": {
+            "active": volatility_mult > 1.0,
+            "multiplier": volatility_mult,
+            "mode": "AGGRESSIVE" if volatility_mult >= 1.5 else "NORMAL",
+            "scan_interval": f"{int(60/volatility_mult)}s"
+        }
     }
 
 @app.get("/health")
@@ -794,12 +990,16 @@ async def health():
 
 @app.get("/api/signals")
 async def get_signals():
-    """Get current trading signals"""
+    """Get current trading signals with volatility state"""
     global current_signals, last_signal_time
     
     try:
-        # Refresh signals if stale or empty
-        if time.time() - last_signal_time > 60 or not current_signals:
+        # Get current volatility state
+        volatility_mult, threshold = get_volatility_multiplier()
+        
+        # Refresh signals if stale or empty (faster during volatile periods)
+        refresh_interval = 60 / volatility_mult
+        if time.time() - last_signal_time > refresh_interval or not current_signals:
             if is_market_open():
                 current_signals = await signal_generator.scan_universe()
                 last_signal_time = time.time()
@@ -818,7 +1018,11 @@ async def get_signals():
             },
             "market": {
                 "open": is_market_open(),
-                "regime": signal_generator.regime_detector.current_regime
+                "regime": signal_generator.regime_detector.current_regime,
+                "volatility_mode": volatility_mult > 1.0,
+                "volatility_multiplier": volatility_mult,
+                "confidence_threshold": threshold,
+                "scan_speed": f"{int(60/volatility_mult)}s"
             }
         }
     except Exception as e:
@@ -872,6 +1076,90 @@ async def execute_trade(symbol: str, action: str, quantity: int = None):
         
     except Exception as e:
         logger.error(f"Execute trade error: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/emergency-exit")
+async def emergency_exit(symbol: str = None):
+    """Emergency exit positions"""
+    try:
+        exits = []
+        
+        if symbol:
+            # Exit specific position
+            if symbol in signal_generator.portfolio.positions:
+                position = signal_generator.portfolio.positions[symbol]
+                ticker = yf.Ticker(symbol)
+                current_price = ticker.info.get('currentPrice', position['avg_price'])
+                
+                exit_signal = EnhancedSignal(
+                    symbol=symbol,
+                    action="SELL",
+                    price=current_price,
+                    confidence=1.0,
+                    ml_confidence=1.0,
+                    ensemble_score=1.0,
+                    risk_score=0,
+                    strategy="emergency_exit",
+                    ml_strategy="manual",
+                    explanation="EMERGENCY MANUAL EXIT",
+                    technical_indicators={},
+                    market_regime="exit",
+                    edge_score=1.0,
+                    expected_return=0,
+                    sharpe_ratio=0,
+                    stop_loss=0,
+                    take_profit=0,
+                    position_size=position['qty'],
+                    timestamp=datetime.now().isoformat(),
+                    execution_priority=10
+                )
+                
+                result = signal_generator.portfolio.execute_trade(exit_signal)
+                if result['success']:
+                    exits.append(symbol)
+        else:
+            # EXIT ALL POSITIONS
+            for symbol in list(signal_generator.portfolio.positions.keys()):
+                position = signal_generator.portfolio.positions[symbol]
+                ticker = yf.Ticker(symbol)
+                current_price = ticker.info.get('currentPrice', position['avg_price'])
+                
+                exit_signal = EnhancedSignal(
+                    symbol=symbol,
+                    action="SELL",
+                    price=current_price,
+                    confidence=1.0,
+                    ml_confidence=1.0,
+                    ensemble_score=1.0,
+                    risk_score=0,
+                    strategy="emergency_exit_all",
+                    ml_strategy="manual",
+                    explanation="EMERGENCY EXIT ALL",
+                    technical_indicators={},
+                    market_regime="exit",
+                    edge_score=1.0,
+                    expected_return=0,
+                    sharpe_ratio=0,
+                    stop_loss=0,
+                    take_profit=0,
+                    position_size=position['qty'],
+                    timestamp=datetime.now().isoformat(),
+                    execution_priority=10
+                )
+                
+                result = signal_generator.portfolio.execute_trade(exit_signal)
+                if result['success']:
+                    exits.append(symbol)
+        
+        return {
+            "success": True,
+            "positions_exited": exits,
+            "cash": signal_generator.portfolio.cash,
+            "portfolio_value": signal_generator.portfolio.get_total_value()
+        }
+        
+    except Exception as e:
+        logger.error(f"Emergency exit error: {e}")
         return {"success": False, "error": str(e)}
 
 @app.get("/api/portfolio")
@@ -994,28 +1282,78 @@ async def broadcast_message(message: Dict):
 # ============================================
 
 async def auto_trading_loop():
-    """Main auto-trading loop"""
+    """Main auto-trading loop with volatility-aware aggressive trading and exit management"""
     while True:
         try:
             if not is_market_open():
                 await asyncio.sleep(300)  # Wait 5 minutes
                 continue
             
+            # CHECK EXITS FIRST - Before generating new signals
+            exit_results = await signal_generator.exit_manager.check_exits()
+            if exit_results:
+                for exit in exit_results:
+                    await broadcast_message({
+                        "type": "position_exit",
+                        "exit": exit,
+                        "portfolio_value": signal_generator.portfolio.get_total_value()
+                    })
+            
+            # Get volatility configuration
+            volatility_mult, confidence_threshold = get_volatility_multiplier()
+            
+            # Determine current zone for entry tracking
+            current_zone = None
+            if volatility_mult >= 1.8:
+                current_zone = "opening_bell"
+            elif volatility_mult >= 1.5:
+                current_zone = "power_hour" 
+            elif volatility_mult >= 2.0:
+                current_zone = "closing_cross"
+            
+            # FASTER SCANNING DURING VOLATILE PERIODS
+            if volatility_mult >= 1.5:
+                scan_interval = 10  # 10 seconds during high volatility
+                logger.info(f"⚡ RAPID SCAN MODE - {scan_interval}s interval")
+            elif volatility_mult > 1.0:
+                scan_interval = 20  # 20 seconds during medium volatility
+            else:
+                scan_interval = 60  # Normal 60 seconds
+            
             # Generate signals
             signals = await signal_generator.scan_universe()
             
-            # Auto-execute high confidence signals
+            # AUTO-EXECUTE WITH VOLATILITY-ADJUSTED THRESHOLDS
+            executed_count = 0
             for signal in signals:
-                if signal.confidence >= 0.75 and signal.edge_score >= 0.6:
+                # More aggressive during volatile periods
+                edge_threshold = 0.6 / volatility_mult  # Lower edge requirement
+                
+                if signal.confidence >= confidence_threshold and signal.edge_score >= edge_threshold:
+                    # Increase position size during high volatility
+                    if volatility_mult >= 1.5:
+                        signal.position_size = int(signal.position_size * 1.5)
+                    
                     result = signal_generator.portfolio.execute_trade(signal)
                     
                     if result.get("success"):
-                        logger.info(f"Auto-executed: {signal.action} {signal.symbol} @ ${signal.price}")
+                        executed_count += 1
+                        
+                        # MARK VOLATILITY ENTRY for exit tracking
+                        if current_zone:
+                            signal_generator.exit_manager.mark_volatility_entry(signal.symbol, current_zone)
+                        
+                        logger.info(f"🎯 VOLATILE AUTO-EXEC: {signal.action} {signal.symbol} @ ${signal.price} [mult={volatility_mult:.1f}]")
                         await broadcast_message({
                             "type": "auto_trade",
                             "signal": signal.to_dict(),
-                            "trade": result["trade"]
+                            "trade": result["trade"],
+                            "volatility_zone": volatility_mult > 1.0
                         })
+                        
+                        # Limit trades per scan during normal times, unlimited during volatile
+                        if executed_count >= 3 and volatility_mult <= 1.0:
+                            break
             
             # Update current signals
             global current_signals
@@ -1024,11 +1362,13 @@ async def auto_trading_loop():
             # Broadcast signals
             await broadcast_message({
                 "type": "signals_update",
-                "signals": [s.to_dict() for s in signals]
+                "signals": [s.to_dict() for s in signals],
+                "scan_interval": scan_interval,
+                "volatility_active": volatility_mult > 1.0
             })
             
             # Wait before next iteration
-            await asyncio.sleep(60)
+            await asyncio.sleep(scan_interval)
             
         except Exception as e:
             logger.error(f"Auto-trading loop error: {e}")
@@ -1041,8 +1381,11 @@ async def startup():
     
     logger.info("="*60)
     logger.info("PHOTON AI EDGE TRADING PLATFORM v2.0 - PRODUCTION")
-    logger.info("Market Hours Check: Enabled")
-    logger.info("Error Handling: Enhanced")
+    logger.info("HIGH VOLATILITY TRADING: ENABLED")
+    logger.info("Opening Bell: 1.8x aggression (9:30-10:00)")
+    logger.info("Power Hour: 1.5x aggression (3:00-3:50)")
+    logger.info("Closing Cross: 2.0x aggression (3:50-4:00)")
+    logger.info("Rapid scan mode during volatile periods: 10-20s")
     logger.info("="*60)
 
 if __name__ == "__main__":
