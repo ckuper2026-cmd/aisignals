@@ -79,8 +79,7 @@ def get_volatility_multiplier() -> tuple:
 
 # Trading parameters - reduced universe for stability
 STOCK_UNIVERSE = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", 
-    "SPY", "QQQ", "IWM"
+    "SPY", "QQQ", "AAPL", "MSFT", "NVDA"  # Just 5 most liquid stocks
 ]
 
 # Edge computing optimization
@@ -397,9 +396,14 @@ class PositionExitManager:
         
         for symbol, position in list(self.portfolio.positions.items()):
             try:
-                # Get current price
+                # Get current price using history instead of info
                 ticker = yf.Ticker(symbol)
-                current_price = ticker.info.get('currentPrice', position['current_price'])
+                recent = ticker.history(period="1d", interval="1m")
+                if not recent.empty:
+                    current_price = recent['Close'].iloc[-1]
+                else:
+                    # Fallback to saved price
+                    current_price = position.get('current_price', position['avg_price'])
                 
                 # Calculate P&L
                 entry_price = position['avg_price']
@@ -636,7 +640,8 @@ class AdvancedSignalGenerator:
         for attempt in range(3):
             try:
                 ticker = yf.Ticker(symbol)
-                hist = ticker.history(period="1mo", interval="1h")
+                # Use history with specific period to avoid info issues
+                hist = ticker.history(period="5d", interval="1h")
                 
                 if not hist.empty and len(hist) >= 20:
                     break
@@ -644,11 +649,18 @@ class AdvancedSignalGenerator:
             except Exception as e:
                 logger.warning(f"Yahoo Finance attempt {attempt+1} failed for {symbol}: {e}")
                 if attempt < 2:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)  # Shorter delay
         
         if hist is None or hist.empty or len(hist) < 20:
-            logger.warning(f"Insufficient data for {symbol}")
-            return None
+            # Try one more time with different period
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period="1mo")  # Daily data as fallback
+                if not hist.empty:
+                    logger.info(f"Using daily data for {symbol}")
+            except:
+                logger.warning(f"Insufficient data for {symbol}")
+                return None
         
         try:
             # Detect market regime
@@ -927,18 +939,41 @@ class AdvancedSignalGenerator:
         signals.sort(key=lambda x: x.execution_priority, reverse=True)
         
         # FORCE AT LEAST ONE SIGNAL if none generated
-        if len(signals) == 0 and volatility_mult >= 1.2:
-            for symbol in ["SPY", "QQQ", "AAPL"]:
-                try:
-                    forced_signal = await self.generate_enhanced_signal(symbol)
-                    if forced_signal:
-                        forced_signal.confidence = max(0.5, forced_signal.confidence)
-                        forced_signal.edge_score = max(0.4, forced_signal.edge_score)
-                        signals.append(forced_signal)
-                        logger.warning(f"⚠️ FORCED SIGNAL: {symbol}")
-                        break
-                except:
-                    continue
+        if len(signals) == 0:
+            # Try to force a signal on SPY (most reliable)
+            try:
+                logger.warning("No signals generated, forcing SPY signal")
+                ticker = yf.Ticker("SPY")
+                hist = ticker.history(period="1d")
+                if not hist.empty:
+                    current_price = hist['Close'].iloc[-1]
+                    
+                    forced_signal = EnhancedSignal(
+                        symbol="SPY",
+                        action="BUY",
+                        price=float(current_price),
+                        confidence=0.51,
+                        ml_confidence=0.5,
+                        ensemble_score=0.5,
+                        risk_score=0.3,
+                        strategy="forced_entry",
+                        ml_strategy="forced",
+                        explanation="FORCED: Market open with no signals",
+                        technical_indicators={},
+                        market_regime="unknown",
+                        edge_score=0.4,
+                        expected_return=0.02,
+                        sharpe_ratio=0.5,
+                        stop_loss=current_price * 0.98,
+                        take_profit=current_price * 1.02,
+                        position_size=10,
+                        timestamp=datetime.now().isoformat(),
+                        execution_priority=5
+                    )
+                    signals.append(forced_signal)
+                    logger.warning(f"⚠️ FORCED SIGNAL: SPY @ ${current_price:.2f}")
+            except Exception as e:
+                logger.error(f"Failed to force signal: {e}")
         
         # Return more signals during volatile periods
         if volatility_mult >= 1.5:
@@ -1108,7 +1143,11 @@ async def emergency_exit(symbol: str = None):
             if symbol in signal_generator.portfolio.positions:
                 position = signal_generator.portfolio.positions[symbol]
                 ticker = yf.Ticker(symbol)
-                current_price = ticker.info.get('currentPrice', position['avg_price'])
+                try:
+                    recent = ticker.history(period="1d", interval="1m")
+                    current_price = recent['Close'].iloc[-1] if not recent.empty else position['avg_price']
+                except:
+                    current_price = position['avg_price']
                 
                 exit_signal = EnhancedSignal(
                     symbol=symbol,
@@ -1141,7 +1180,11 @@ async def emergency_exit(symbol: str = None):
             for symbol in list(signal_generator.portfolio.positions.keys()):
                 position = signal_generator.portfolio.positions[symbol]
                 ticker = yf.Ticker(symbol)
-                current_price = ticker.info.get('currentPrice', position['avg_price'])
+                try:
+                    recent = ticker.history(period="1d", interval="1m")
+                    current_price = recent['Close'].iloc[-1] if not recent.empty else position['avg_price']
+                except:
+                    current_price = position['avg_price']
                 
                 exit_signal = EnhancedSignal(
                     symbol=symbol,
