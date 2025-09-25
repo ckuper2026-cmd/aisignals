@@ -54,11 +54,12 @@ app.add_middleware(
 
 # High volatility trading zones - AI advantage periods
 VOLATILITY_ZONES = {
-    "opening_bell": {"start": "09:30", "end": "10:00", "multiplier": 1.8, "threshold": 0.5},
-    "morning_reversal": {"start": "10:00", "end": "10:30", "multiplier": 1.3, "threshold": 0.6},
-    "lunch_dip": {"start": "11:30", "end": "12:30", "multiplier": 1.1, "threshold": 0.7},
-    "power_hour": {"start": "15:00", "end": "15:50", "multiplier": 1.5, "threshold": 0.55},
-    "closing_cross": {"start": "15:50", "end": "16:00", "multiplier": 2.0, "threshold": 0.45}
+    "opening_bell": {"start": "09:30", "end": "10:00", "multiplier": 1.8, "threshold": 0.3},
+    "morning_reversal": {"start": "10:00", "end": "10:30", "multiplier": 1.3, "threshold": 0.35},
+    "midday": {"start": "10:30", "end": "14:00", "multiplier": 1.2, "threshold": 0.4},  # Added
+    "pre_power": {"start": "14:00", "end": "15:00", "multiplier": 1.3, "threshold": 0.35},  # Added
+    "power_hour": {"start": "15:00", "end": "15:50", "multiplier": 1.5, "threshold": 0.3},
+    "closing_cross": {"start": "15:50", "end": "16:00", "multiplier": 2.0, "threshold": 0.25}
 }
 
 def get_volatility_multiplier() -> tuple:
@@ -72,9 +73,9 @@ def get_volatility_multiplier() -> tuple:
             if config["start"] <= current_time <= config["end"]:
                 logger.info(f"🔥 {zone.upper()} ACTIVE - {config['multiplier']}x signals, threshold: {config['threshold']}")
                 return config["multiplier"], config["threshold"]
-        return 1.0, 0.75  # Default values
+        return 1.0, 0.45  # Default values - LOWERED from 0.75
     except:
-        return 1.0, 0.75
+        return 1.0, 0.45  # LOWERED from 0.75
 
 # Trading parameters - reduced universe for stability
 STOCK_UNIVERSE = [
@@ -749,19 +750,23 @@ class AdvancedSignalGenerator:
             confidence = 0.0
             strategy = "no_signal"
             
-            # Check conditions safely
+            # Check conditions safely with LOWER requirements
             conditions = []
             
-            if latest['RSI'] < 30 and latest['BB_position'] < 0.2:
-                conditions.append(("oversold_bounce", "BUY", 0.8))
-            if latest['RSI'] > 70 and latest['BB_position'] > 0.8:
-                conditions.append(("overbought_reversal", "SELL", 0.8))
-            if latest['MACD'] > latest['MACD_signal'] and latest['MACD_histogram'] > 0:
-                conditions.append(("macd_bullish", "BUY", 0.7))
-            if latest['MACD'] < latest['MACD_signal'] and latest['MACD_histogram'] < 0:
-                conditions.append(("macd_bearish", "SELL", 0.7))
-            if latest['Volume_ratio'] > 2.0 and latest['Close'] > latest['SMA_20']:
-                conditions.append(("volume_breakout", "BUY", 0.75))
+            if latest['RSI'] < 40:  # Was 30
+                conditions.append(("oversold_bounce", "BUY", 0.85))
+            if latest['RSI'] > 60:  # Was 70
+                conditions.append(("overbought_reversal", "SELL", 0.85))
+            if latest['MACD'] > latest['MACD_signal'] * 0.95:  # Much more lenient
+                conditions.append(("macd_bullish", "BUY", 0.75))
+            if latest['MACD'] < latest['MACD_signal'] * 1.05:  # Much more lenient
+                conditions.append(("macd_bearish", "SELL", 0.75))
+            if latest['Volume_ratio'] > 1.2:  # Was 2.0
+                conditions.append(("volume_breakout", "BUY", 0.80))
+            if latest['Close'] > latest['SMA_20']:  # Simple trend following
+                conditions.append(("trend_following", "BUY", 0.65))
+            if latest['Close'] < latest['SMA_20']:  # Simple trend reversal
+                conditions.append(("trend_reversal", "SELL", 0.65))
             
             # Find strongest signal
             for name, signal_action, signal_confidence in conditions:
@@ -920,6 +925,20 @@ class AdvancedSignalGenerator:
         
         # Sort by priority
         signals.sort(key=lambda x: x.execution_priority, reverse=True)
+        
+        # FORCE AT LEAST ONE SIGNAL if none generated
+        if len(signals) == 0 and volatility_mult >= 1.2:
+            for symbol in ["SPY", "QQQ", "AAPL"]:
+                try:
+                    forced_signal = await self.generate_enhanced_signal(symbol)
+                    if forced_signal:
+                        forced_signal.confidence = max(0.5, forced_signal.confidence)
+                        forced_signal.edge_score = max(0.4, forced_signal.edge_score)
+                        signals.append(forced_signal)
+                        logger.warning(f"⚠️ FORCED SIGNAL: {symbol}")
+                        break
+                except:
+                    continue
         
         # Return more signals during volatile periods
         if volatility_mult >= 1.5:
@@ -1326,10 +1345,14 @@ async def auto_trading_loop():
             # AUTO-EXECUTE WITH VOLATILITY-ADJUSTED THRESHOLDS
             executed_count = 0
             for signal in signals:
-                # More aggressive during volatile periods
-                edge_threshold = 0.6 / volatility_mult  # Lower edge requirement
+                # MUCH MORE AGGRESSIVE - Lower requirements
+                edge_threshold = 0.2 / volatility_mult  # Was 0.6, now 0.2
                 
-                if signal.confidence >= confidence_threshold and signal.edge_score >= edge_threshold:
+                # FORCE TRADING - Much lower thresholds
+                min_confidence = max(0.3, confidence_threshold * 0.7)  # At least 30%
+                min_edge = max(0.1, edge_threshold)  # At least 10% edge
+                
+                if signal.confidence >= min_confidence or signal.edge_score >= min_edge:  # OR instead of AND
                     # Increase position size during high volatility
                     if volatility_mult >= 1.5:
                         signal.position_size = int(signal.position_size * 1.5)
