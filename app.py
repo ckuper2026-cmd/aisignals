@@ -1004,6 +1004,17 @@ async def root():
         "railway_app": "ai-signals.up.railway.app"
     }
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Railway"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "market_open": is_market_open(),
+        "ml_enabled": ML_ENABLED,
+        "portfolio_value": signal_generator.portfolio.get_total_value() if signal_generator else 100000
+    }
+
 @app.get("/api/signals")
 async def get_signals():
     """Get current multi-strategy signals"""
