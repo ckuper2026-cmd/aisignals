@@ -1,0 +1,114 @@
+monitoring guide for personal machine learning progress:
+
+ML Progress Tracking
+Quick Commands
+1. Check ML Status
+bashpython check_ml.py status
+Shows:
+
+Training samples
+Model accuracies
+Last update time
+
+2. View Recent Predictions
+bashpython check_ml.py predictions
+Shows:
+
+Last 10 predictions
+Confidence levels
+Outcomes (profitable/loss/pending)
+Recent accuracy %
+
+3. Track Improvement
+bashpython check_ml.py improvement
+Shows:
+
+This week vs last week accuracy
+Confidence trends
+Weekly change %
+
+4. Full ML Report
+bashpython ml_tracker.py report
+Shows:
+
+Total predictions
+Accuracy trend
+Profit metrics
+Model-by-model performance
+
+5. Generate Progress Charts
+bashpython ml_tracker.py plot
+Creates charts showing:
+
+Accuracy over time
+Confidence distribution
+Model comparison
+Cumulative P&L
+
+What to Look For
+Good Signs
+
+Accuracy improving week-over-week
+Higher confidence on correct predictions
+Profit factor > 1.5
+Consistent model agreement
+
+Warning Signs
+
+Accuracy below 50% for 2+ weeks
+High confidence on losing trades
+One model dominating (others not learning)
+No improvement after 100+ trades
+
+File Locations
+ML tracking data stored in:
+personal_trading/
+├── ml_tracking/
+│   ├── predictions.json    # All predictions
+│   ├── metrics.json       # Daily metrics
+│   └── model_performance.json
+└── models/personal/
+    ├── metadata.json      # Model stats
+    └── *.pkl             # Trained models
+Integration
+The ML tracker automatically records:
+
+Every prediction made
+Trade outcomes when positions close
+Model retraining events
+Performance metrics hourly
+
+Example Output
+ML Status:
+  Trained: True
+  Training Samples: 5234
+  Last Updated: 2025-01-19T14:30:00
+
+Model Accuracies:
+  xgboost: 62.3%
+  random_forest: 59.8%
+  neural_network: 61.1%
+
+Recent Accuracy: 61.5% (8/13 correct)
+
+This Week:
+  Avg Accuracy: 61.2%
+  Avg Confidence: 68.4%
+
+Last Week:
+  Avg Accuracy: 58.7%
+  Avg Confidence: 65.2%
+
+Weekly Change:
+  Accuracy: +2.5%
+Quick Health Check
+Run this every few days:
+bash# See everything at once
+python check_ml.py
+If accuracy is:
+
+Below 50%: Check market conditions, may need retraining
+50-55%: Normal for first 2 weeks
+55-60%: Expected after 1 month
+60-65%: Good performance
+Above 65%: Excellent (verify it's real)

@@ -1,9 +1,0 @@
-alpaca keys:
-normal: PKMJT6MUN5WKY1HK902L
-secret:WsmKyiQdpfld9LWf5RIRykhzyWNOEAtqGBO5WKGP
-supabase:
-url key:
-const SUPABASE_URL = "https://uqnmywjfwjlsdxqktdgk.supabase.co"
-const supabase = createClient(SUPABASE_URL, process.env.SUPABASE_KEY);
-anon key:
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbm15d2pmd2psc2R4cWt0ZGdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc1MzE1NTIsImV4cCI6MjA3MzEwNzU1Mn0.854CBrrrnRqTlG_XzdLigUNyn26xVZaEG-t2iUBGvKk

@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+alpaca-trade-api>=3.0.0
+websockets>=9.0
+aiohttp
+pandas
+numpy
+yfinance
+scikit-learn
+xgboost
+joblib
+python-dotenv
+supabase
+stripe
+cryptography

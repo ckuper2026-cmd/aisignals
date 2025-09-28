@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0a0e1a;
+            color: #ffffff;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #00d4ff;
+            font-size: 24px;
+        }
+        
+        .card {
+            background: #1a1f2e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        
+        .card h2 {
+            color: #00d4ff;
+            margin-bottom: 15px;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #2a3040;
+        }
+        
+        .metric:last-child {
+            border-bottom: none;
+        }
+        
+        .label {
+            color: #8892a6;
+            font-size: 14px;
+        }
+        
+        .value {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .positive {
+            color: #00ff88;
+        }
+        
+        .negative {
+            color: #ff4747;
+        }
+        
+        .neutral {
+            color: #ffffff;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-running {
+            background: #00ff88;
+            color: #000;
+        }
+        
+        .status-stopped {
+            background: #ff4747;
+            color: #fff;
+        }
+        
+        .refresh-btn {
+            width: 100%;
+            padding: 12px;
+            background: #00d4ff;
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        
+        .refresh-btn:active {
+            background: #0099cc;
+        }
+        
+        .positions {
+            margin-top: 15px;
+        }
+        
+        .position {
+            background: #0a0e1a;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .position-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .symbol {
+            font-weight: bold;
+            font-size: 16px;
+        }
+        
+        .timestamp {
+            text-align: center;
+            color: #8892a6;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        .error {
+            background: #ff4747;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        #loading {
+            text-align: center;
+            padding: 40px;
+            color: #8892a6;
+        }
+        
+        .zone-badge {
+            background: #ff6b00;
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-left: 8px;
+        }
+    </style>
+</head>
+<body>
+    <h1>📈 Trading Monitor</h1>
+    
+    <button class="refresh-btn" onclick="refreshData()">🔄 Refresh</button>
+    
+    <div id="loading">Loading...</div>
+    <div id="error" class="error" style="display: none;"></div>
+    
+    <div id="content" style="display: none;">
+        <!-- System Status -->
+        <div class="card">
+            <h2>System Status</h2>
+            <div class="metric">
+                <span class="label">Status</span>
+                <span id="status" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Market</span>
+                <span id="market" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Uptime</span>
+                <span id="uptime" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Scans</span>
+                <span id="scans" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Zone</span>
+                <span id="zone" class="value"></span>
+            </div>
+        </div>
+        
+        <!-- Portfolio -->
+        <div class="card">
+            <h2>💰 Portfolio</h2>
+            <div class="metric">
+                <span class="label">Total Value</span>
+                <span id="totalValue" class="value neutral"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Cash</span>
+                <span id="cash" class="value neutral"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Return</span>
+                <span id="return" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Return %</span>
+                <span id="returnPct" class="value"></span>
+            </div>
+        </div>
+        
+        <!-- Performance -->
+        <div class="card">
+            <h2>📊 Performance</h2>
+            <div class="metric">
+                <span class="label">Total Trades</span>
+                <span id="totalTrades" class="value neutral"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Win Rate</span>
+                <span id="winRate" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Realized P&L</span>
+                <span id="realizedPnl" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Unrealized P&L</span>
+                <span id="unrealizedPnl" class="value"></span>
+            </div>
+            <div class="metric">
+                <span class="label">Max Drawdown</span>
+                <span id="maxDrawdown" class="value negative"></span>
+            </div>
+        </div>
+        
+        <!-- Positions -->
+        <div class="card">
+            <h2>📈 Open Positions (<span id="positionCount">0</span>)</h2>
+            <div id="positions" class="positions"></div>
+        </div>
+    </div>
+    
+    <div class="timestamp" id="timestamp"></div>
+    
+    <script>
+        // UPDATE THIS WITH YOUR RAILWAY URL!
+        const API_URL = 'https://your-app.up.railway.app';
+        // For local testing:
+        // const API_URL = 'http://localhost:8000';
+        
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD'
+            }).format(value);
+        }
+        
+        function formatPercent(value) {
+            return value.toFixed(2) + '%';
+        }
+        
+        function getColorClass(value) {
+            if (value > 0) return 'positive';
+            if (value < 0) return 'negative';
+            return 'neutral';
+        }
+        
+        async function refreshData() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('content').style.display = 'none';
+            
+            try {
+                // Fetch all data
+                const [statusResponse, portfolioResponse, performanceResponse] = await Promise.all([
+                    fetch(`${API_URL}/`),
+                    fetch(`${API_URL}/api/portfolio`),
+                    fetch(`${API_URL}/api/performance`)
+                ]);
+                
+                const status = await statusResponse.json();
+                const portfolio = await portfolioResponse.json();
+                const performance = await performanceResponse.json();
+                
+                // Update System Status
+                document.getElementById('status').innerHTML = status.status === 'running' 
+                    ? '<span class="status-badge status-running">RUNNING</span>'
+                    : '<span class="status-badge status-stopped">STOPPED</span>';
+                document.getElementById('market').textContent = status.market_open ? 'OPEN' : 'CLOSED';
+                document.getElementById('uptime').textContent = status.uptime || 'N/A';
+                document.getElementById('scans').textContent = status.scan_count || '0';
+                
+                // Volatility Zone
+                if (status.volatility.zone) {
+                    document.getElementById('zone').innerHTML = 
+                        `${status.volatility.zone} <span class="zone-badge">${status.volatility.multiplier}x</span>`;
+                } else {
+                    document.getElementById('zone').textContent = 'Normal';
+                }
+                
+                // Update Portfolio
+                const totalValue = portfolio.summary.total_value;
+                const totalReturn = portfolio.summary.total_return;
+                const returnPct = portfolio.summary.total_return_pct;
+                
+                document.getElementById('totalValue').textContent = formatCurrency(totalValue);
+                document.getElementById('cash').textContent = formatCurrency(portfolio.summary.cash);
+                document.getElementById('return').textContent = formatCurrency(totalReturn);
+                document.getElementById('return').className = 'value ' + getColorClass(totalReturn);
+                document.getElementById('returnPct').textContent = formatPercent(returnPct);
+                document.getElementById('returnPct').className = 'value ' + getColorClass(returnPct);
+                
+                // Update Performance
+                const metrics = performance.overall;
+                document.getElementById('totalTrades').textContent = metrics.total_trades;
+                document.getElementById('winRate').textContent = formatPercent(metrics.win_rate);
+                document.getElementById('winRate').className = 'value ' + (metrics.win_rate >= 50 ? 'positive' : 'negative');
+                document.getElementById('realizedPnl').textContent = formatCurrency(metrics.realized_pnl);
+                document.getElementById('realizedPnl').className = 'value ' + getColorClass(metrics.realized_pnl);
+                document.getElementById('unrealizedPnl').textContent = formatCurrency(metrics.unrealized_pnl);
+                document.getElementById('unrealizedPnl').className = 'value ' + getColorClass(metrics.unrealized_pnl);
+                document.getElementById('maxDrawdown').textContent = formatPercent(metrics.max_drawdown);
+                
+                // Update Positions
+                const positions = portfolio.positions;
+                document.getElementById('positionCount').textContent = positions.length;
+                const positionsDiv = document.getElementById('positions');
+                
+                if (positions.length === 0) {
+                    positionsDiv.innerHTML = '<div style="text-align: center; color: #8892a6;">No open positions</div>';
+                } else {
+                    positionsDiv.innerHTML = positions.map(pos => `
+                        <div class="position">
+                            <div class="position-header">
+                                <span class="symbol">${pos.symbol}</span>
+                                <span class="${getColorClass(pos.pnl)}">${formatCurrency(pos.pnl)}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="label">Qty @ Entry</span>
+                                <span class="value">${pos.quantity} @ ${formatCurrency(pos.entry_price)}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="label">Current</span>
+                                <span class="value">${formatCurrency(pos.current_price)} (${pos.pnl_pct > 0 ? '+' : ''}${formatPercent(pos.pnl_pct)})</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                // Update timestamp
+                document.getElementById('timestamp').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+                
+                // Show content
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('content').style.display = 'block';
+                
+            } catch (error) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = 'Error loading data: ' + error.message;
+            }
+        }
+        
+        // Auto-refresh every 30 seconds
+        setInterval(refreshData, 30000);
+        
+        // Initial load
+        refreshData();
+    </script>
+</body>
+</html>

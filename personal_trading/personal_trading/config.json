@@ -1,0 +1,83 @@
+{
+  "symbols": [
+    "AAPL", "MSFT", "GOOGL", "NVDA", "META", "AMZN",
+    "JPM", "V", "MA", "BRK-B", "JNJ", "UNH",
+    "SPY", "QQQ", "VXX", "GLD", "TLT"
+  ],
+  "strategies": {
+    "momentum": {
+      "enabled": true,
+      "weight": 0.25,
+      "params": {
+        "lookback": 20,
+        "threshold": 0.02,
+        "volume_confirmation": true
+      }
+    },
+    "mean_reversion": {
+      "enabled": true,
+      "weight": 0.20,
+      "params": {
+        "rsi_oversold": 30,
+        "rsi_overbought": 70,
+        "bb_deviation": 2
+      }
+    },
+    "pairs_trading": {
+      "enabled": true,
+      "weight": 0.15,
+      "params": {
+        "correlation_threshold": 0.8,
+        "z_score_entry": 2,
+        "z_score_exit": 0.5
+      }
+    },
+    "volatility_breakout": {
+      "enabled": true,
+      "weight": 0.20,
+      "params": {
+        "vol_expansion_threshold": 1.3,
+        "volume_ratio_min": 1.5
+      }
+    },
+    "ml_ensemble": {
+      "enabled": false,
+      "weight": 0.20,
+      "params": {
+        "confidence_threshold": 0.65,
+        "use_deep_learning": false
+      }
+    }
+  },
+  "risk_params": {
+    "max_position_size": 0.15,
+    "max_sector_exposure": 0.30,
+    "max_correlation": 0.7,
+    "max_drawdown": 0.15,
+    "daily_loss_limit": 0.03,
+    "position_limit": 10,
+    "kelly_fraction": 0.25,
+    "var_confidence": 0.95,
+    "sharpe_target": 1.5,
+    "rebalance_threshold": 0.05
+  },
+  "execution": {
+    "slippage": 0.001,
+    "commission": 0.0,
+    "use_limit_orders": true,
+    "partial_fills": true,
+    "paper_trade": true
+  },
+  "notifications": {
+    "email_alerts": false,
+    "webhook_url": "",
+    "alert_on_trade": true,
+    "alert_on_stop_loss": true,
+    "daily_summary": true
+  },
+  "data_sources": {
+    "primary": "yfinance",
+    "backup": "alpha_vantage",
+    "real_time": false
+  }
+}

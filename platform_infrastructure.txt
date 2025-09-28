@@ -1,0 +1,869 @@
+"""
+Platform Infrastructure - Authentication, Users, Subscriptions
+This handles everything EXCEPT trading logic
+Trading logic will be added separately in your app_production.py
+"""
+
+import os
+import asyncio
+import json
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional, Any
+from dataclasses import dataclass
+import logging
+import secrets
+from decimal import Decimal
+
+# FastAPI
+from fastapi import FastAPI, HTTPException, Depends, Header, status, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, EmailStr
+import uvicorn
+
+# Supabase
+from supabase import create_client, Client
+import postgrest
+
+# Stripe (Optional)
+try:
+    import stripe
+    STRIPE_AVAILABLE = True
+except ImportError:
+    STRIPE_AVAILABLE = False
+    print("Stripe not installed - payment features disabled")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ============================================
+# CONFIGURATION
+# ============================================
+
+# Supabase Configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+
+# Stripe Configuration (Optional)
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_ENABLED = bool(STRIPE_SECRET_KEY) and STRIPE_AVAILABLE
+
+if STRIPE_ENABLED:
+    stripe.api_key = STRIPE_SECRET_KEY
+    logger.info("Stripe integration enabled")
+else:
+    logger.warning("Stripe not configured - running without payment processing")
+
+# App Configuration
+APP_SECRET = os.getenv("APP_SECRET", secrets.token_urlsafe(32))
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
+# ============================================
+# INITIALIZE APP & CLIENTS
+# ============================================
+
+app = FastAPI(
+    title="Trading Platform Infrastructure API",
+    description="User management, auth, and subscriptions. Trading logic separate.",
+    version="1.0.0",
+    docs_url="/docs" if ENVIRONMENT == "development" else None,
+    redoc_url="/redoc" if ENVIRONMENT == "development" else None
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "https://yourdomain.com", "*"],  # * for development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Supabase clients
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# ============================================
+# DATA MODELS
+# ============================================
+
+class UserSignUp(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    full_name: Optional[str] = None
+
+class UserSignIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserProfile(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str]
+    subscription_tier: str = "free"
+    subscription_status: str = "inactive"
+    stripe_customer_id: Optional[str]
+    created_at: datetime
+    settings: Dict = {}
+
+class TradingAccount(BaseModel):
+    user_id: str
+    account_type: str  # paper, live
+    balance: Decimal
+    currency: str = "USD"
+    created_at: datetime
+
+# ============================================
+# SUBSCRIPTION TIERS
+# ============================================
+
+SUBSCRIPTION_TIERS = {
+    "free": {
+        "name": "Free",
+        "price": 0,
+        "stripe_price_id": None,
+        "features": [
+            "Paper trading",
+            "Basic signals",
+            "5 trades per day",
+            "Email support"
+        ],
+        "limits": {
+            "trades_per_day": 5,
+            "positions": 3,
+            "api_calls_per_hour": 60
+        }
+    },
+    "premium": {
+        "name": "Premium",
+        "price": 49,
+        "stripe_price_id": os.getenv("STRIPE_PREMIUM_PRICE_ID"),
+        "features": [
+            "Paper + Live trading",
+            "Advanced AI signals",
+            "Unlimited trades",
+            "Priority support",
+            "API access"
+        ],
+        "limits": {
+            "trades_per_day": -1,  # unlimited
+            "positions": 20,
+            "api_calls_per_hour": 1000
+        }
+    },
+    "enterprise": {
+        "name": "Enterprise",
+        "price": 499,
+        "stripe_price_id": os.getenv("STRIPE_ENTERPRISE_PRICE_ID"),
+        "features": [
+            "Everything in Premium",
+            "Custom strategies",
+            "Dedicated support",
+            "White-label option",
+            "Data export"
+        ],
+        "limits": {
+            "trades_per_day": -1,
+            "positions": -1,
+            "api_calls_per_hour": -1
+        }
+    }
+}
+
+# ============================================
+# AUTHENTICATION & AUTHORIZATION
+# ============================================
+
+async def get_current_user(authorization: str = Header(None)) -> Dict:
+    """Verify JWT token and return user data"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    token = authorization.replace("Bearer ", "")
+    
+    try:
+        # Verify token with Supabase
+        user_response = supabase.auth.get_user(token)
+        if not user_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+        
+        # Get full user profile from database
+        profile = supabase.table("profiles").select("*").eq(
+            "id", user_response.user.id
+        ).single().execute()
+        
+        return profile.data
+        
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed"
+        )
+
+async def check_subscription_limits(user: Dict, resource: str) -> bool:
+    """Check if user has access to resource based on subscription"""
+    tier = user.get("subscription_tier", "free")
+    limits = SUBSCRIPTION_TIERS[tier]["limits"]
+    
+    # Check specific limits based on resource
+    if resource == "trades":
+        if limits["trades_per_day"] == -1:
+            return True
+        
+        # Count today's trades
+        today_start = datetime.now().replace(hour=0, minute=0, second=0)
+        trades_count = supabase.table("trades").select(
+            "count", count="exact"
+        ).eq("user_id", user["id"]).gte(
+            "created_at", today_start.isoformat()
+        ).execute()
+        
+        return trades_count.count < limits["trades_per_day"]
+    
+    return True
+
+# ============================================
+# USER MANAGEMENT ENDPOINTS
+# ============================================
+
+@app.post("/api/auth/signup", response_model=Dict)
+async def sign_up(user_data: UserSignUp):
+    """Create new user account"""
+    try:
+        # Create auth user
+        auth_response = supabase.auth.sign_up({
+            "email": user_data.email,
+            "password": user_data.password,
+            "options": {
+                "data": {
+                    "full_name": user_data.full_name
+                }
+            }
+        })
+        
+        if not auth_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to create user"
+            )
+        
+        # Create Stripe customer (only if Stripe is enabled)
+        stripe_customer_id = None
+        if STRIPE_ENABLED:
+            try:
+                stripe_customer = stripe.Customer.create(
+                    email=user_data.email,
+                    name=user_data.full_name,
+                    metadata={
+                        "user_id": auth_response.user.id
+                    }
+                )
+                stripe_customer_id = stripe_customer.id
+            except Exception as e:
+                logger.warning(f"Stripe customer creation failed: {e}")
+        
+        # Create user profile
+        profile_data = {
+            "id": auth_response.user.id,
+            "email": user_data.email,
+            "full_name": user_data.full_name,
+            "stripe_customer_id": stripe_customer_id,
+            "subscription_tier": "free",
+            "subscription_status": "active",
+            "settings": {},
+            "created_at": datetime.now().isoformat()
+        }
+        
+        profile_response = supabase.table("profiles").insert(profile_data).execute()
+        
+        # Create default paper trading account
+        account_data = {
+            "user_id": auth_response.user.id,
+            "account_type": "paper",
+            "balance": 100000,  # $100k paper money
+            "currency": "USD",
+            "created_at": datetime.now().isoformat()
+        }
+        
+        account_response = supabase.table("trading_accounts").insert(account_data).execute()
+        
+        return {
+            "success": True,
+            "user_id": auth_response.user.id,
+            "email": user_data.email,
+            "message": "Account created successfully. Please check your email to verify."
+        }
+        
+    except Exception as e:
+        logger.error(f"Signup error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/api/auth/signin", response_model=Dict)
+async def sign_in(credentials: UserSignIn):
+    """Sign in user"""
+    try:
+        auth_response = supabase.auth.sign_in_with_password({
+            "email": credentials.email,
+            "password": credentials.password
+        })
+        
+        if not auth_response.session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials"
+            )
+        
+        # Get user profile
+        profile = supabase.table("profiles").select("*").eq(
+            "id", auth_response.user.id
+        ).single().execute()
+        
+        return {
+            "success": True,
+            "access_token": auth_response.session.access_token,
+            "refresh_token": auth_response.session.refresh_token,
+            "user": profile.data
+        }
+        
+    except Exception as e:
+        logger.error(f"Signin error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials"
+        )
+
+@app.post("/api/auth/signout")
+async def sign_out(user: Dict = Depends(get_current_user)):
+    """Sign out user"""
+    try:
+        supabase.auth.sign_out()
+        return {"success": True, "message": "Signed out successfully"}
+    except Exception as e:
+        logger.error(f"Signout error: {e}")
+        return {"success": True}  # Always return success for signout
+
+@app.get("/api/auth/profile", response_model=UserProfile)
+async def get_profile(user: Dict = Depends(get_current_user)):
+    """Get current user profile"""
+    return UserProfile(**user)
+
+@app.patch("/api/auth/profile")
+async def update_profile(
+    updates: Dict,
+    user: Dict = Depends(get_current_user)
+):
+    """Update user profile"""
+    try:
+        # Whitelist allowed fields
+        allowed_fields = ["full_name", "settings"]
+        filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+        
+        if not filtered_updates:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid fields to update"
+            )
+        
+        response = supabase.table("profiles").update(filtered_updates).eq(
+            "id", user["id"]
+        ).execute()
+        
+        return {"success": True, "profile": response.data[0]}
+        
+    except Exception as e:
+        logger.error(f"Profile update error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+# ============================================
+# SUBSCRIPTION MANAGEMENT
+# ============================================
+
+@app.get("/api/subscriptions/tiers")
+async def get_subscription_tiers():
+    """Get available subscription tiers"""
+    return SUBSCRIPTION_TIERS
+
+@app.post("/api/subscriptions/create-checkout")
+async def create_checkout_session(
+    tier: str,
+    user: Dict = Depends(get_current_user)
+):
+    """Create Stripe checkout session for subscription"""
+    if not STRIPE_ENABLED:
+        return {
+            "success": False,
+            "message": "Payment processing not configured. Using free tier only.",
+            "tier": "free"
+        }
+    
+    try:
+        if tier not in SUBSCRIPTION_TIERS or tier == "free":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid subscription tier"
+            )
+        
+        price_id = SUBSCRIPTION_TIERS[tier]["stripe_price_id"]
+        if not price_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Subscription not available"
+            )
+        
+        # Create Stripe checkout session
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            customer=user["stripe_customer_id"],
+            line_items=[{
+                "price": price_id,
+                "quantity": 1
+            }],
+            mode="subscription",
+            success_url=f"{os.getenv('FRONTEND_URL')}/subscription-success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{os.getenv('FRONTEND_URL')}/subscription-cancelled",
+            metadata={
+                "user_id": user["id"],
+                "tier": tier
+            }
+        )
+        
+        return {
+            "success": True,
+            "checkout_url": session.url,
+            "session_id": session.id
+        }
+        
+    except Exception as e:
+        logger.error(f"Checkout session error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/api/subscriptions/cancel")
+async def cancel_subscription(user: Dict = Depends(get_current_user)):
+    """Cancel user subscription"""
+    if not STRIPE_ENABLED:
+        return {
+            "success": False,
+            "message": "No active subscription to cancel"
+        }
+    
+    try:
+        # Get active subscription
+        subscriptions = stripe.Subscription.list(
+            customer=user["stripe_customer_id"],
+            status="active",
+            limit=1
+        )
+        
+        if not subscriptions.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No active subscription found"
+            )
+        
+        # Cancel at period end
+        subscription = stripe.Subscription.modify(
+            subscriptions.data[0].id,
+            cancel_at_period_end=True
+        )
+        
+        # Update database
+        supabase.table("profiles").update({
+            "subscription_status": "cancelling"
+        }).eq("id", user["id"]).execute()
+        
+        return {
+            "success": True,
+            "message": "Subscription will be cancelled at period end",
+            "cancel_at": subscription.cancel_at
+        }
+        
+    except Exception as e:
+        logger.error(f"Subscription cancellation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events"""
+    if not STRIPE_ENABLED:
+        return {"success": False, "message": "Stripe not configured"}
+    
+    try:
+        payload = await request.body()
+        sig_header = request.headers.get("stripe-signature")
+        
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+        
+        # Handle subscription events
+        if event["type"] == "checkout.session.completed":
+            session = event["data"]["object"]
+            user_id = session["metadata"]["user_id"]
+            tier = session["metadata"]["tier"]
+            
+            # Update user subscription
+            supabase.table("profiles").update({
+                "subscription_tier": tier,
+                "subscription_status": "active",
+                "subscription_updated_at": datetime.now().isoformat()
+            }).eq("id", user_id).execute()
+            
+        elif event["type"] == "customer.subscription.deleted":
+            subscription = event["data"]["object"]
+            customer_id = subscription["customer"]
+            
+            # Find user and downgrade to free
+            profile = supabase.table("profiles").select("*").eq(
+                "stripe_customer_id", customer_id
+            ).single().execute()
+            
+            if profile.data:
+                supabase.table("profiles").update({
+                    "subscription_tier": "free",
+                    "subscription_status": "inactive",
+                    "subscription_updated_at": datetime.now().isoformat()
+                }).eq("id", profile.data["id"]).execute()
+        
+        return {"success": True}
+        
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+# ============================================
+# TRADING ACCOUNT MANAGEMENT
+# ============================================
+
+@app.get("/api/accounts")
+async def get_trading_accounts(user: Dict = Depends(get_current_user)):
+    """Get user's trading accounts"""
+    try:
+        accounts = supabase.table("trading_accounts").select("*").eq(
+            "user_id", user["id"]
+        ).execute()
+        
+        return {
+            "success": True,
+            "accounts": accounts.data
+        }
+        
+    except Exception as e:
+        logger.error(f"Get accounts error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@app.post("/api/accounts/create")
+async def create_trading_account(
+    account_type: str,
+    user: Dict = Depends(get_current_user)
+):
+    """Create new trading account"""
+    try:
+        # Check if user can create live account
+        if account_type == "live" and user["subscription_tier"] == "free":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Premium subscription required for live trading"
+            )
+        
+        account_data = {
+            "user_id": user["id"],
+            "account_type": account_type,
+            "balance": 100000 if account_type == "paper" else 0,
+            "currency": "USD",
+            "created_at": datetime.now().isoformat()
+        }
+        
+        response = supabase.table("trading_accounts").insert(account_data).execute()
+        
+        return {
+            "success": True,
+            "account": response.data[0]
+        }
+        
+    except Exception as e:
+        logger.error(f"Create account error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+# ============================================
+# ANALYTICS & HISTORY (Read-only)
+# ============================================
+
+@app.get("/api/trades")
+async def get_trades(
+    account_id: Optional[str] = None,
+    limit: int = 50,
+    user: Dict = Depends(get_current_user)
+):
+    """Get user's trade history"""
+    try:
+        query = supabase.table("trades").select("*").eq("user_id", user["id"])
+        
+        if account_id:
+            query = query.eq("account_id", account_id)
+        
+        trades = query.order("created_at", desc=True).limit(limit).execute()
+        
+        return {
+            "success": True,
+            "trades": trades.data,
+            "count": len(trades.data)
+        }
+        
+    except Exception as e:
+        logger.error(f"Get trades error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@app.get("/api/analytics/performance")
+async def get_performance_analytics(
+    account_id: str,
+    user: Dict = Depends(get_current_user)
+):
+    """Get account performance analytics"""
+    try:
+        # Verify account ownership
+        account = supabase.table("trading_accounts").select("*").eq(
+            "id", account_id
+        ).eq("user_id", user["id"]).single().execute()
+        
+        if not account.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Account not found"
+            )
+        
+        # Get trade statistics
+        trades = supabase.table("trades").select("*").eq(
+            "account_id", account_id
+        ).eq("status", "executed").execute()
+        
+        if not trades.data:
+            return {
+                "success": True,
+                "analytics": {
+                    "total_trades": 0,
+                    "win_rate": 0,
+                    "total_pnl": 0,
+                    "average_pnl": 0,
+                    "best_trade": None,
+                    "worst_trade": None,
+                    "account_balance": float(account.data["balance"])
+                }
+            }
+        
+        # Calculate metrics
+        total_trades = len(trades.data)
+        profitable_trades = [t for t in trades.data if t.get("pnl", 0) > 0]
+        win_rate = len(profitable_trades) / total_trades * 100 if total_trades > 0 else 0
+        
+        total_pnl = sum(t.get("pnl", 0) for t in trades.data)
+        average_pnl = total_pnl / total_trades if total_trades > 0 else 0
+        
+        best_trade = max(trades.data, key=lambda t: t.get("pnl", 0), default=None)
+        worst_trade = min(trades.data, key=lambda t: t.get("pnl", 0), default=None)
+        
+        return {
+            "success": True,
+            "analytics": {
+                "total_trades": total_trades,
+                "win_rate": round(win_rate, 2),
+                "total_pnl": float(total_pnl),
+                "average_pnl": float(average_pnl),
+                "best_trade": best_trade,
+                "worst_trade": worst_trade,
+                "account_balance": float(account.data["balance"])
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Analytics error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+# ============================================
+# HEALTH & STATUS ENDPOINTS
+# ============================================
+
+@app.get("/")
+async def root():
+    """API root endpoint"""
+    return {
+        "name": "Trading Platform Infrastructure API",
+        "version": "1.0.0",
+        "status": "operational",
+        "environment": ENVIRONMENT,
+        "features": {
+            "authentication": True,
+            "user_management": True,
+            "subscriptions": STRIPE_ENABLED,
+            "trading_accounts": True,
+            "trading_logic": False  # This is handled by your app_production.py
+        },
+        "documentation": "/docs" if ENVIRONMENT == "development" else None
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    checks = {
+        "api": "healthy",
+        "database": "unknown",
+        "payments": "disabled" if not STRIPE_ENABLED else "unknown"
+    }
+    
+    # Check Supabase connection
+    try:
+        supabase.table("profiles").select("count", count="exact").limit(1).execute()
+        checks["database"] = "healthy"
+    except:
+        checks["database"] = "unhealthy"
+    
+    # Check Stripe connection (only if enabled)
+    if STRIPE_ENABLED:
+        try:
+            stripe.Account.retrieve()
+            checks["payments"] = "healthy"
+        except:
+            checks["payments"] = "unhealthy"
+    
+    # Overall health is good if API and database are healthy (Stripe is optional)
+    overall_health = checks["api"] == "healthy" and checks["database"] == "healthy"
+    
+    return {
+        "status": "healthy" if overall_health else "degraded",
+        "checks": checks,
+        "stripe_enabled": STRIPE_ENABLED,
+        "timestamp": datetime.now().isoformat()
+    }
+
+# ============================================
+# INTEGRATION ENDPOINTS FOR TRADING SYSTEM
+# ============================================
+
+@app.post("/api/integration/verify-user")
+async def verify_user_for_trading(user: Dict = Depends(get_current_user)):
+    """Endpoint for trading system to verify user and get permissions"""
+    return {
+        "user_id": user["id"],
+        "email": user["email"],
+        "subscription_tier": user["subscription_tier"],
+        "can_live_trade": user["subscription_tier"] != "free",
+        "limits": SUBSCRIPTION_TIERS[user["subscription_tier"]]["limits"],
+        "verified": True
+    }
+
+@app.post("/api/integration/record-trade")
+async def record_trade_from_trading_system(
+    trade_data: Dict,
+    user: Dict = Depends(get_current_user)
+):
+    """Endpoint for trading system to record executed trades"""
+    try:
+        # Add user_id to trade data
+        trade_data["user_id"] = user["id"]
+        trade_data["created_at"] = datetime.now().isoformat()
+        
+        # Insert trade record
+        response = supabase.table("trades").insert(trade_data).execute()
+        
+        return {
+            "success": True,
+            "trade_id": response.data[0]["id"],
+            "message": "Trade recorded successfully"
+        }
+    except Exception as e:
+        logger.error(f"Trade recording error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+# ============================================
+# ERROR HANDLERS
+# ============================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "status_code": 500,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+# ============================================
+# STARTUP
+# ============================================
+
+@app.on_event("startup")
+async def startup():
+    """Initialize services on startup"""
+    logger.info("=" * 60)
+    logger.info("Trading Platform Infrastructure - Ready")
+    logger.info(f"Environment: {ENVIRONMENT}")
+    logger.info(f"Supabase: {'Connected' if SUPABASE_URL else 'Not configured'}")
+    logger.info(f"Stripe: {'Enabled' if STRIPE_ENABLED else 'Disabled'}")
+    logger.info("Trading Logic: To be integrated from app_production.py")
+    logger.info("=" * 60)
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(
+        "platform_infrastructure:app",
+        host="0.0.0.0",
+        port=port,
+        reload=ENVIRONMENT == "development",
+        log_level="info"
+    )

@@ -13,10 +13,6 @@ from dataclasses import dataclass, asdict
 import time
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 # FastAPI imports
 from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect
@@ -28,16 +24,6 @@ import uvicorn
 import yfinance as yf
 import pytz
 from collections import deque
-
-# Import ML brain for learning
-try:
-    from ml_brain import SimpleMLBrain, ml_brain
-    ML_ENABLED = True
-    logger.info("Simple ML Brain loaded successfully")
-except Exception as e:
-    logger.warning(f"ML Brain not available: {e}")
-    ML_ENABLED = False
-    ml_brain = None
 
 # Configure logging
 logging.basicConfig(
@@ -63,74 +49,51 @@ app.add_middleware(
 )
 
 # ============================================
-# CONFIGURATION FROM ENVIRONMENT
+# CONFIGURATION
 # ============================================
-
-# Get configuration from environment
-MIN_CONFIDENCE = float(os.getenv("MIN_CONFIDENCE_THRESHOLD", "0.45"))  # Lower for learning
-MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PERCENTAGE", "2.0"))
-MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "20"))
-DEFAULT_POSITION_SIZE = int(os.getenv("DEFAULT_POSITION_SIZE", "5000"))
-SIGNAL_INTERVAL = int(os.getenv("SIGNAL_INTERVAL", "60"))
-AUTO_TRADING_ENABLED = os.getenv("AUTO_TRADING_DEFAULT_ENABLED", "true").lower() == "true"
-AUTO_TRADE_MIN_CONF = float(os.getenv("AUTO_TRADE_MIN_CONFIDENCE", "0.50"))  # Lower for learning
-
-# Alpaca configuration
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY_ID")
-ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-PAPER_TRADING = os.getenv("PAPER_TRADING_DEFAULT", "true").lower() == "true"
-
-# Stock universe from environment
-STOCK_UNIVERSE = os.getenv("STOCK_UNIVERSE", "SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,AMD").split(",")
-
-# Platform info
-PLATFORM_NAME = os.getenv("PLATFORM_NAME", "Photon AI Trading Platform")
-PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "2.1.0")
 
 # Trading zones with strategy preferences
 MARKET_ZONES = {
     "pre_market": {
         "start": "09:00", "end": "09:30", 
         "strategies": ["news_catalyst", "gap_trading"],
-        "multiplier": 1.2,
-        "threshold": 0.35  # Lowered from default
+        "multiplier": 1.2
     },
     "opening_bell": {
         "start": "09:30", "end": "10:00",
         "strategies": ["opening_range", "momentum", "volatility_breakout"],
         "multiplier": 1.8,
-        "threshold": 0.25  # Lowered from 0.3
+        "threshold": 0.3
     },
     "morning_trend": {
         "start": "10:00", "end": "11:30",
         "strategies": ["trend_following", "vwap_bounce", "momentum"],
         "multiplier": 1.3,
-        "threshold": 0.30  # Lowered from 0.35
+        "threshold": 0.35
     },
     "lunch_hour": {
         "start": "11:30", "end": "13:30",
         "strategies": ["mean_reversion", "range_trading", "scalping"],
         "multiplier": 1.1,
-        "threshold": 0.35  # Lowered from 0.4
+        "threshold": 0.4
     },
     "afternoon_trend": {
         "start": "13:30", "end": "15:00",
         "strategies": ["trend_following", "sector_rotation", "pairs_trading"],
         "multiplier": 1.2,
-        "threshold": 0.33  # Lowered from 0.38
+        "threshold": 0.38
     },
     "power_hour": {
         "start": "15:00", "end": "15:50",
         "strategies": ["momentum", "breakout", "trend_following"],
         "multiplier": 1.5,
-        "threshold": 0.28  # Lowered from 0.32
+        "threshold": 0.32
     },
     "closing_cross": {
         "start": "15:50", "end": "16:00",
         "strategies": ["closing_reversal", "momentum", "scalping"],
         "multiplier": 2.0,
-        "threshold": 0.20  # Lowered from 0.25
+        "threshold": 0.25
     }
 }
 
@@ -300,16 +263,10 @@ class StrategyAggregator:
             rs = gain.iloc[-1] / (loss.iloc[-1] + 0.001)
             rsi = 100 - (100 / (1 + rs))
             
-            # MORE AGGRESSIVE THRESHOLDS
-            if current < lower and rsi < 40:  # Was 35
-                return {"action": "BUY", "confidence": 0.75, "reason": "Oversold bounce"}
-            elif current > upper and rsi > 60:  # Was 65
-                return {"action": "SELL", "confidence": 0.75, "reason": "Overbought reversal"}
-            # Add medium confidence signals
-            elif current < sma20 and rsi < 45:
-                return {"action": "BUY", "confidence": 0.60, "reason": "Below average"}
-            elif current > sma20 and rsi > 55:
-                return {"action": "SELL", "confidence": 0.60, "reason": "Above average"}
+            if current < lower and rsi < 35:
+                return {"action": "BUY", "confidence": 0.70, "reason": "Oversold bounce"}
+            elif current > upper and rsi > 65:
+                return {"action": "SELL", "confidence": 0.70, "reason": "Overbought reversal"}
         except:
             pass
         
@@ -331,27 +288,14 @@ class StrategyAggregator:
             ema26 = data['Close'].ewm(span=26).mean().iloc[-1]
             macd = ema12 - ema26
             
-            # Strong signals
             if sma10 > sma20 > sma50 and macd > 0:
                 momentum = (current - data['Close'].iloc[-10]) / data['Close'].iloc[-10]
-                conf = min(0.65 + momentum * 5, 0.85)  # Higher base
+                conf = min(0.6 + momentum * 5, 0.85)
                 return {"action": "BUY", "confidence": conf, "reason": "Uptrend confirmed"}
             elif sma10 < sma20 < sma50 and macd < 0:
                 momentum = (data['Close'].iloc[-10] - current) / data['Close'].iloc[-10]
-                conf = min(0.65 + momentum * 5, 0.85)
+                conf = min(0.6 + momentum * 5, 0.85)
                 return {"action": "SELL", "confidence": conf, "reason": "Downtrend confirmed"}
-            
-            # Medium signals - simple MA crossovers
-            elif sma10 > sma20 and current > sma20:
-                return {"action": "BUY", "confidence": 0.60, "reason": "Bullish MA cross"}
-            elif sma10 < sma20 and current < sma20:
-                return {"action": "SELL", "confidence": 0.60, "reason": "Bearish MA cross"}
-            
-            # Weak signals - just price vs moving average
-            elif current > sma50:
-                return {"action": "BUY", "confidence": 0.50, "reason": "Above long MA"}
-            elif current < sma50:
-                return {"action": "SELL", "confidence": 0.50, "reason": "Below long MA"}
         except:
             pass
         
@@ -368,18 +312,12 @@ class StrategyAggregator:
             
             volume_surge = data['Volume'].iloc[-5:].mean() / data['Volume'].mean()
             
-            # MORE AGGRESSIVE THRESHOLDS
-            if roc_5 > 0.001 and roc_10 > 0.002 and volume_surge > 1.1:  # Lowered all thresholds
-                conf = min(0.65 + roc_5 * 20, 0.80)  # Higher base confidence
+            if roc_5 > 0.002 and roc_10 > 0.004 and volume_surge > 1.3:
+                conf = min(0.6 + roc_5 * 30, 0.80)
                 return {"action": "BUY", "confidence": conf, "reason": "Strong momentum"}
-            elif roc_5 < -0.001 and roc_10 < -0.002 and volume_surge > 1.1:  # Lowered
-                conf = min(0.65 + abs(roc_5) * 20, 0.80)
+            elif roc_5 < -0.002 and roc_10 < -0.004 and volume_surge > 1.3:
+                conf = min(0.6 + abs(roc_5) * 30, 0.80)
                 return {"action": "SELL", "confidence": conf, "reason": "Negative momentum"}
-            # Add medium momentum signals
-            elif roc_5 > 0.0005:  # Very small positive momentum
-                return {"action": "BUY", "confidence": 0.55, "reason": "Mild upward momentum"}
-            elif roc_5 < -0.0005:  # Very small negative momentum
-                return {"action": "SELL", "confidence": 0.55, "reason": "Mild downward momentum"}
         except:
             pass
         
@@ -485,26 +423,7 @@ class EnhancedPortfolio:
         self.trades = deque(maxlen=1000)
         self.pending_orders = {}
         self.strategy_aggregator = StrategyAggregator()
-        self.last_trade_timestamp = time.time()  # Track last trade time
-        self.trades_today_count = 0  # Track daily trades
         
-    def track_trade_for_learning(self, trade: Dict):
-        """Track trade for ML learning"""
-        if ML_ENABLED and ml_brain:
-            # Simple tracking - just note the trade happened
-            try:
-                market_data = {
-                    'current_price': trade.get('price', 0),
-                    'day_high': trade.get('price', 0) * 1.02,  # Estimate
-                    'day_low': trade.get('price', 0) * 0.98,   # Estimate
-                    'volume_ratio': 1.0,
-                    'rsi': 50,
-                    'change_5min': 0
-                }
-                ml_brain.record_trade(market_data, trade.get('action', 'BUY'), None)
-            except:
-                pass
-    
     def get_total_value(self) -> float:
         try:
             positions_value = sum(
@@ -570,8 +489,6 @@ class EnhancedPortfolio:
             
             # Mark trade time
             self.strategy_aggregator.mark_trade(signal.symbol)
-            self.last_trade_timestamp = time.time()  # Update last trade time
-            self.trades_today_count += 1
             
             # Record trade
             trade = {
@@ -632,43 +549,6 @@ class MultiStrategySignalGenerator:
         if not strategy_results:
             return None
         
-        # Get ML prediction if available
-        ml_vote = None
-        ml_confidence = 0
-        if ML_ENABLED and ml_brain:
-            try:
-                # Prepare simple market data for ML
-                current_price = hist['Close'].iloc[-1]
-                market_data = {
-                    'current_price': current_price,
-                    'day_high': hist['High'].max(),
-                    'day_low': hist['Low'].min(),
-                    'volume_ratio': hist['Volume'].iloc[-5:].mean() / hist['Volume'].mean() if len(hist) > 5 else 1,
-                    'rsi': 50,  # Simple RSI placeholder
-                    'change_5min': (current_price - hist['Close'].iloc[-5]) / hist['Close'].iloc[-5] if len(hist) > 5 else 0
-                }
-                
-                ml_prediction = ml_brain.predict(market_data)
-                
-                # Add ML vote only if confident enough
-                if ml_prediction.get('ml_active') and ml_prediction.get('confidence', 0) > 0.6:
-                    ml_vote = ml_prediction['action']
-                    ml_confidence = ml_prediction['confidence']
-                    
-                    if ml_vote != 'NEUTRAL':
-                        strategy_results['ml_brain'] = {
-                            'action': 'BUY' if ml_vote == 'BUY' else 'SELL',
-                            'confidence': ml_confidence,
-                            'reason': ml_prediction.get('reason', 'ML prediction')
-                        }
-                        logger.info(f"ML: {symbol} {ml_vote} ({ml_confidence:.1%})")
-                
-                # Record this evaluation for learning
-                ml_brain.record_trade(market_data, 'EVAL', None)
-                    
-            except Exception as e:
-                logger.debug(f"ML prediction skipped: {e}")
-        
         # Aggregate votes
         buy_votes = 0
         sell_votes = 0
@@ -697,21 +577,12 @@ class MultiStrategySignalGenerator:
             primary_action = "SELL"
             combined_confidence = sell_votes / max(len(strategy_results), 1)
         else:
-            # If close, pick the stronger one
-            if abs(buy_votes - sell_votes) < 0.1 and max(buy_votes, sell_votes) > 0:
-                primary_action = "BUY" if buy_votes >= sell_votes else "SELL"
-                combined_confidence = max(buy_votes, sell_votes) / max(len(strategy_results), 1)
-            else:
-                primary_action = "HOLD"
-                combined_confidence = hold_votes / max(len(strategy_results), 1)
+            primary_action = "HOLD"
+            combined_confidence = hold_votes / max(len(strategy_results), 1)
         
         # Apply zone multiplier
         zone_multiplier = zone_config.get("multiplier", 1.0)
         combined_confidence = min(0.95, combined_confidence * zone_multiplier)
-        
-        # Ensure minimum confidence if we have any votes
-        if primary_action != "HOLD" and combined_confidence < 0.4:
-            combined_confidence = 0.4  # Minimum 40% for any actionable signal
         
         # Don't generate HOLD signals
         if primary_action == "HOLD":
@@ -767,9 +638,7 @@ class MultiStrategySignalGenerator:
         for symbol in STOCK_UNIVERSE:
             try:
                 signal = await self.generate_multi_strategy_signal(symbol)
-                # Accept signals with reasonable confidence
-                min_threshold = zone_config.get("threshold", MIN_CONFIDENCE) * 0.8  # 20% below zone threshold
-                if signal and signal.combined_confidence >= min_threshold:
+                if signal and signal.combined_confidence >= zone_config.get("threshold", 0.5):
                     signals.append(signal)
             except Exception as e:
                 logger.error(f"Error scanning {symbol}: {e}")
@@ -778,7 +647,7 @@ class MultiStrategySignalGenerator:
         signals.sort(key=lambda x: x.execution_priority, reverse=True)
         
         # Return top signals based on zone
-        max_signals = 15 if zone_config.get("multiplier", 1) >= 1.5 else 10
+        max_signals = 10 if zone_config.get("multiplier", 1) >= 1.5 else 5
         return signals[:max_signals]
 
 # ============================================
@@ -1012,27 +881,6 @@ async def get_portfolio():
         logger.error(f"Portfolio error: {e}")
         return {"error": str(e)}
 
-@app.get("/api/ml-stats")
-async def get_ml_stats():
-    """Get ML brain statistics"""
-    if not ML_ENABLED or not ml_brain:
-        return {
-            "enabled": False,
-            "message": "ML brain not available"
-        }
-    
-    stats = ml_brain.get_stats()
-    return {
-        "enabled": True,
-        "is_trained": stats['is_trained'],
-        "total_trades": stats['total_trades'],
-        "trades_with_results": stats['trades_with_results'],
-        "accuracy": round(stats['accuracy'] * 100, 1),
-        "predictions_made": stats['predictions_made'],
-        "model_type": stats['model_type'],
-        "status": "Active" if stats['is_trained'] else f"Learning ({stats['trades_with_results']}/30)"
-    }
-
 @app.post("/api/force-exit")
 async def force_exit(symbol: str = None):
     """Force exit positions"""
@@ -1125,9 +973,7 @@ async def broadcast_to_websockets(message: Dict):
 # ============================================
 
 async def enhanced_trading_loop():
-    """Main trading loop with multi-strategy, ML learning, and risk-taking"""
-    consecutive_no_trade_cycles = 0
-    
+    """Main trading loop with multi-strategy and zone awareness"""
     while True:
         try:
             if not is_market_open():
@@ -1139,74 +985,32 @@ async def enhanced_trading_loop():
             # Check exits first
             exits = await exit_manager.check_exits()
             
-            # Evaluate exits for ML learning
-            if ML_ENABLED and ml_brain and exits:
-                for exit in exits:
-                    try:
-                        # Simple outcome: profit or loss percentage
-                        result = exit.get('pnl_percent', 0)
-                        # Record with simple market data (we don't need complex features here)
-                        ml_brain.evaluate_prediction(
-                            {'action': 'BUY' if result > 0 else 'SELL'},
-                            result
-                        )
-                    except:
-                        pass
-            
             # Generate signals if we have room for positions
             if signal_generator.portfolio.can_open_position():
                 signals = await signal_generator.scan_universe()
                 
-                # Get base threshold from zone config
-                threshold = zone_config.get("threshold", MIN_CONFIDENCE)
-                
-                # RISK-TAKING: Lower threshold gradually if no recent trades
-                if consecutive_no_trade_cycles > 3:
-                    risk_adjustment = 0.9 ** (consecutive_no_trade_cycles - 3)  # Gradual lowering
-                    threshold = max(0.3, threshold * risk_adjustment)  # Floor at 30%
-                    logger.info(f"📊 Risk-taking mode: Threshold lowered to {threshold:.2%} after {consecutive_no_trade_cycles} cycles")
-                
-                # Execute signals above threshold
-                executed = False
-                for signal in signals[:5]:  # Check top 5 signals
-                    if signal.combined_confidence >= threshold:
-                        # Add slight randomness for exploration (10% chance to take riskier trades)
-                        explore = np.random.random() < 0.1
-                        if explore and signal.combined_confidence >= threshold * 0.8:
-                            logger.info(f"🎲 Exploration trade: Taking {signal.symbol} at {signal.combined_confidence:.2%}")
+                # Auto-execute high confidence signals
+                threshold = zone_config.get("threshold", 0.5)
+                for signal in signals[:3]:  # Limit auto-trades
+                    if signal.combined_confidence >= threshold + 0.1:  # Higher than zone threshold
+                        result = signal_generator.portfolio.execute_multi_strategy_trade(signal)
                         
-                        if signal.combined_confidence >= threshold or explore:
-                            result = signal_generator.portfolio.execute_multi_strategy_trade(signal)
+                        if result.get("success"):
+                            logger.info(f"Auto-trade: {signal.primary_action} {signal.symbol} in {zone_name}")
+                            await broadcast_to_websockets({
+                                "type": "auto_trade",
+                                "signal": signal.to_dict(),
+                                "zone": zone_name
+                            })
                             
-                            if result.get("success"):
-                                logger.info(f"Trade executed: {signal.primary_action} {signal.symbol} in {zone_name}")
-                                
-                                # Track for ML learning
-                                signal_generator.portfolio.track_trade_for_learning(result['trade'])
-                                
-                                await broadcast_to_websockets({
-                                    "type": "auto_trade",
-                                    "signal": signal.to_dict(),
-                                    "zone": zone_name,
-                                    "ml_enabled": ML_ENABLED
-                                })
-                                
-                                executed = True
-                                consecutive_no_trade_cycles = 0  # Reset counter
-                                
-                                await asyncio.sleep(5)  # Pause between trades
-                
-                if not executed:
-                    consecutive_no_trade_cycles += 1
-                else:
-                    consecutive_no_trade_cycles = 0
+                            await asyncio.sleep(5)  # Pause between trades
                 
                 # Update current signals
                 global current_signals
                 current_signals = signals
             
             # Sleep based on zone activity
-            sleep_time = SIGNAL_INTERVAL if zone_config.get("multiplier", 1) < 1.5 else SIGNAL_INTERVAL // 2
+            sleep_time = 20 if zone_config.get("multiplier", 1) >= 1.5 else 45
             await asyncio.sleep(sleep_time)
             
         except Exception as e:
@@ -1219,14 +1023,9 @@ async def startup():
     asyncio.create_task(enhanced_trading_loop())
     
     logger.info("="*60)
-    logger.info(f"{PLATFORM_NAME} v{PLATFORM_VERSION}")
+    logger.info("PHOTON AI TRADING PLATFORM - ENHANCED v2.1")
     logger.info("Multi-Strategy Zone-Aware Trading System")
-    logger.info(f"ML Brain: {'ACTIVE - Simple Learning' if ML_ENABLED else 'DISABLED'}")
-    logger.info(f"Alpaca: {'PAPER' if PAPER_TRADING else 'LIVE'} Trading")
-    logger.info(f"Auto Trading: {'ENABLED' if AUTO_TRADING_ENABLED else 'DISABLED'}")
-    logger.info(f"Min Confidence: {MIN_CONFIDENCE:.1%}")
-    logger.info(f"Risk-Taking: Progressive threshold lowering for learning")
-    logger.info(f"Stock Universe: {len(STOCK_UNIVERSE)} stocks")
+    logger.info("Market zones with specialized strategies active")
     logger.info("="*60)
 
 if __name__ == "__main__":

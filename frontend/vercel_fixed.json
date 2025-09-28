@@ -4,6 +4,14 @@
     {
       "src": "index.html",
       "use": "@vercel/static"
+    },
+    {
+      "src": "*.js",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "*.css",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
@@ -12,19 +20,10 @@
       "dest": "/index.html"
     }
   ],
-  "headers": [
+  "rewrites": [
     {
       "source": "/(.*)",
-      "headers": [
-        {
-          "key": "X-Frame-Options",
-          "value": "SAMEORIGIN"
-        },
-        {
-          "key": "X-Content-Type-Options",
-          "value": "nosniff"
-        }
-      ]
+      "destination": "/index.html"
     }
   ]
 }

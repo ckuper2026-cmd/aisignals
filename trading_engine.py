@@ -1,455 +1,389 @@
-import os
-import asyncio
-import aiohttp
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-import yfinance as yf
-import json
-from dataclasses import dataclass, asdict
-import logging
-from collections import deque
+"""
+Advanced Trading Engine with Centralized Portfolio Management
+Handles all trading logic, risk management, and position tracking
+"""
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+import numpy as np
+import pandas as pd
+from collections import deque
+import json
+
+logger = logging.getLogger(__name__)
 
 @dataclass
-class Signal:
+class Position:
     symbol: str
-    action: str
-    price: float
-    confidence: float
-    risk_score: float
-    strategy: str
-    explanation: str
-    rsi: float
-    volume_ratio: float
-    momentum: float
-    timestamp: str
-    potential_return: float
+    quantity: int
+    entry_price: float
+    current_price: float
+    entry_time: datetime
     stop_loss: float
     take_profit: float
+    unrealized_pnl: float = 0.0
+    realized_pnl: float = 0.0
 
-class AdvancedTradingEngine:
-    def __init__(self, api_key: str, api_secret: str):
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.base_url = "https://paper-api.alpaca.markets"
+@dataclass 
+class Trade:
+    id: str
+    symbol: str
+    side: str  # BUY or SELL
+    quantity: int
+    price: float
+    timestamp: datetime
+    strategy: str
+    pnl: float = 0.0
+
+class CentralizedPortfolio:
+    """Centralized portfolio for performance testing and risk management"""
+    
+    def __init__(self, initial_capital: float = 100000):
+        self.initial_capital = initial_capital
+        self.cash = initial_capital
+        self.positions = {}  # {symbol: Position}
+        self.trades = deque(maxlen=1000)
+        self.pending_orders = {}
         
-        # Performance tracking
-        self.signal_history = deque(maxlen=1000)
-        self.win_rate = 0.0
-        self.total_return = 0.0
+        # Performance metrics
+        self.total_trades = 0
+        self.winning_trades = 0
+        self.losing_trades = 0
+        self.total_pnl = 0.0
+        self.peak_value = initial_capital
+        self.max_drawdown = 0.0
+        self.sharpe_ratio = 0.0
+        self.daily_returns = deque(maxlen=252)
         
-        # Strategy weights (will be optimized over time)
-        self.strategy_weights = {
-            'trend_following': 0.25,
-            'mean_reversion': 0.20,
-            'momentum': 0.20,
-            'volume_breakout': 0.15,
-            'support_resistance': 0.20
-        }
+        # Risk limits
+        self.max_position_size = 0.1  # 10% per position
+        self.max_portfolio_risk = 0.2  # 20% total risk
+        self.max_correlation = 0.7
+        self.max_daily_loss = 0.05  # 5% daily loss limit
         
-    async def get_account_info(self) -> Dict:
-        """Get Alpaca account information"""
-        headers = {
-            'APCA-API-KEY-ID': self.api_key,
-            'APCA-API-SECRET-KEY': self.api_secret
-        }
+    def get_portfolio_value(self) -> float:
+        """Calculate total portfolio value"""
+        positions_value = sum(
+            pos.quantity * pos.current_price 
+            for pos in self.positions.values()
+        )
+        return self.cash + positions_value
+    
+    def get_position_size(self, symbol: str, price: float, confidence: float) -> int:
+        """Calculate optimal position size using Kelly Criterion"""
+        portfolio_value = self.get_portfolio_value()
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.base_url}/v2/account", headers=headers) as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-                    else:
-                        logging.error(f"Account API error: {resp.status}")
-                        return None
-        except Exception as e:
-            logging.error(f"Account fetch error: {e}")
-            return None
+        # Kelly fraction calculation
+        win_rate = max(0.5, self.winning_trades / max(1, self.total_trades))
+        avg_win = 0.02  # 2% average win
+        avg_loss = 0.01  # 1% average loss
+        
+        kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+        kelly_f = min(0.25, max(0, kelly_f))  # Cap at 25%
+        
+        # Adjust for confidence
+        position_value = portfolio_value * kelly_f * confidence
+        
+        # Apply risk limits
+        max_position = portfolio_value * self.max_position_size
+        position_value = min(position_value, max_position)
+        
+        # Calculate shares
+        if price > 0:
+            shares = int(position_value / price)
+            return max(1, min(shares, int(self.cash / price)))
+        return 0
+    
+    def can_trade(self, symbol: str, side: str, quantity: int, price: float) -> Tuple[bool, str]:
+        """Check if trade is allowed under risk management rules"""
+        
+        # Check daily loss limit
+        daily_pnl = self.calculate_daily_pnl()
+        if daily_pnl < -self.max_daily_loss * self.initial_capital:
+            return False, "Daily loss limit exceeded"
+        
+        # Check cash for buys
+        if side == "BUY":
+            required_cash = quantity * price
+            if required_cash > self.cash:
+                return False, "Insufficient funds"
+        
+        # Check position for sells
+        elif side == "SELL":
+            if symbol not in self.positions:
+                return False, "No position to sell"
+            if self.positions[symbol].quantity < quantity:
+                return False, "Insufficient shares"
+        
+        # Check portfolio concentration
+        position_value = quantity * price
+        portfolio_value = self.get_portfolio_value()
+        if position_value > portfolio_value * self.max_position_size:
+            return False, "Position too large"
+        
+        return True, "OK"
+    
+    def execute_trade(self, symbol: str, side: str, quantity: int, price: float, 
+                     stop_loss: float = None, take_profit: float = None,
+                     strategy: str = "manual") -> Dict:
+        """Execute a trade with full tracking"""
+        
+        # Validate trade
+        can_trade, reason = self.can_trade(symbol, side, quantity, price)
+        if not can_trade:
+            return {"success": False, "reason": reason}
+        
+        trade_id = f"T{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        
+        if side == "BUY":
+            # Update cash
+            self.cash -= quantity * price
             
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate all technical indicators"""
-        # Price-based indicators
-        df['SMA_20'] = df['Close'].rolling(window=20).mean()
-        df['SMA_50'] = df['Close'].rolling(window=50).mean()
-        df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
-        df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
+            # Create or update position
+            if symbol in self.positions:
+                # Average up/down
+                pos = self.positions[symbol]
+                total_quantity = pos.quantity + quantity
+                avg_price = ((pos.quantity * pos.entry_price) + (quantity * price)) / total_quantity
+                pos.quantity = total_quantity
+                pos.entry_price = avg_price
+                pos.current_price = price
+            else:
+                # New position
+                self.positions[symbol] = Position(
+                    symbol=symbol,
+                    quantity=quantity,
+                    entry_price=price,
+                    current_price=price,
+                    entry_time=datetime.now(),
+                    stop_loss=stop_loss or price * 0.98,
+                    take_profit=take_profit or price * 1.02
+                )
         
-        # MACD
-        df['MACD'] = df['EMA_12'] - df['EMA_26']
-        df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['MACD_diff'] = df['MACD'] - df['MACD_signal']
-        
-        # RSI
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        
-        # Bollinger Bands
-        df['BB_middle'] = df['Close'].rolling(window=20).mean()
-        bb_std = df['Close'].rolling(window=20).std()
-        df['BB_upper'] = df['BB_middle'] + (bb_std * 2)
-        df['BB_lower'] = df['BB_middle'] - (bb_std * 2)
-        df['BB_width'] = df['BB_upper'] - df['BB_lower']
-        df['BB_position'] = (df['Close'] - df['BB_lower']) / df['BB_width']
-        
-        # Volume indicators
-        df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
-        df['Volume_ratio'] = df['Volume'] / df['Volume_MA']
-        df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
-        
-        # ATR for volatility
-        high_low = df['High'] - df['Low']
-        high_close = np.abs(df['High'] - df['Close'].shift())
-        low_close = np.abs(df['Low'] - df['Close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        df['ATR'] = true_range.rolling(window=14).mean()
-        
-        # Support and Resistance
-        df['Resistance'] = df['High'].rolling(window=20).max()
-        df['Support'] = df['Low'].rolling(window=20).min()
-        df['SR_position'] = (df['Close'] - df['Support']) / (df['Resistance'] - df['Support'])
-        
-        # Momentum
-        df['Momentum_5'] = (df['Close'] - df['Close'].shift(5)) / df['Close'].shift(5)
-        df['Momentum_10'] = (df['Close'] - df['Close'].shift(10)) / df['Close'].shift(10)
-        
-        return df.ffill().fillna(0)
-        
-    def trend_following_strategy(self, df: pd.DataFrame) -> Dict:
-        """Trend following using multiple timeframes"""
-        latest = df.iloc[-1]
-        score = 0
-        
-        # Trend alignment
-        if latest['Close'] > latest['SMA_20']: score += 2
-        if latest['SMA_20'] > latest['SMA_50']: score += 2
-        if latest['MACD'] > latest['MACD_signal']: score += 1
-        if latest['EMA_12'] > latest['EMA_26']: score += 1
-        
-        # Trend strength
-        trend_strength = abs(latest['Close'] - latest['SMA_20']) / latest['SMA_20']
-        if trend_strength > 0.02: score += 1
-        
-        # Volume confirmation
-        if latest['Volume_ratio'] > 1.2: score += 1
-        
-        if score >= 6:
-            return {'action': 'BUY', 'confidence': min(score / 8, 0.95), 'score': score}
-        elif score <= 2:
-            return {'action': 'SELL', 'confidence': min((8 - score) / 8, 0.95), 'score': score}
-        else:
-            return {'action': 'HOLD', 'confidence': 0.3, 'score': score}
-            
-    def mean_reversion_strategy(self, df: pd.DataFrame) -> Dict:
-        """Mean reversion using Bollinger Bands and RSI"""
-        latest = df.iloc[-1]
-        
-        # Check for oversold/overbought
-        if latest['RSI'] < 30 and latest['BB_position'] < 0.2:
-            confidence = (30 - latest['RSI']) / 30 + (0.2 - latest['BB_position'])
-            return {'action': 'BUY', 'confidence': min(confidence, 0.9)}
-        elif latest['RSI'] > 70 and latest['BB_position'] > 0.8:
-            confidence = (latest['RSI'] - 70) / 30 + (latest['BB_position'] - 0.8)
-            return {'action': 'SELL', 'confidence': min(confidence, 0.9)}
-        else:
-            return {'action': 'HOLD', 'confidence': 0.3}
-            
-    def momentum_strategy(self, df: pd.DataFrame) -> Dict:
-        """Momentum based on price acceleration"""
-        latest = df.iloc[-1]
-        
-        # Check momentum
-        if latest['Momentum_5'] > 0.03 and latest['Momentum_10'] > 0.02:
-            if latest['RSI'] < 70:  # Not overbought
-                confidence = min(latest['Momentum_5'] * 10, 0.9)
-                return {'action': 'BUY', 'confidence': confidence}
-        elif latest['Momentum_5'] < -0.03 and latest['Momentum_10'] < -0.02:
-            if latest['RSI'] > 30:  # Not oversold
-                confidence = min(abs(latest['Momentum_5']) * 10, 0.9)
-                return {'action': 'SELL', 'confidence': confidence}
-                
-        return {'action': 'HOLD', 'confidence': 0.3}
-        
-    def volume_breakout_strategy(self, df: pd.DataFrame) -> Dict:
-        """Volume-based breakout detection"""
-        latest = df.iloc[-1]
-        prev = df.iloc[-2]
-        
-        # Volume spike with price movement
-        if latest['Volume_ratio'] > 2.0:
-            price_change = (latest['Close'] - prev['Close']) / prev['Close']
-            if price_change > 0.01:
-                return {'action': 'BUY', 'confidence': min(latest['Volume_ratio'] / 3, 0.9)}
-            elif price_change < -0.01:
-                return {'action': 'SELL', 'confidence': min(latest['Volume_ratio'] / 3, 0.9)}
-                
-        return {'action': 'HOLD', 'confidence': 0.3}
-        
-    def support_resistance_strategy(self, df: pd.DataFrame) -> Dict:
-        """Support and resistance trading"""
-        latest = df.iloc[-1]
-        
-        # Near support - potential bounce
-        if latest['SR_position'] < 0.2 and latest['RSI'] < 40:
-            return {'action': 'BUY', 'confidence': 0.7}
-        # Near resistance - potential reversal
-        elif latest['SR_position'] > 0.8 and latest['RSI'] > 60:
-            return {'action': 'SELL', 'confidence': 0.7}
-            
-        return {'action': 'HOLD', 'confidence': 0.3}
-        
-    def combine_strategies(self, results: Dict) -> Dict:
-        """Combine all strategy signals with weighted voting"""
-        buy_score = 0
-        sell_score = 0
-        
-        for strategy, result in results.items():
-            weight = self.strategy_weights.get(strategy, 0.2)
-            if result['action'] == 'BUY':
-                buy_score += result['confidence'] * weight
-            elif result['action'] == 'SELL':
-                sell_score += result['confidence'] * weight
-                
-        # Determine final action
-        if buy_score > sell_score and buy_score > 0.4:
-            return {
-                'action': 'BUY',
-                'confidence': min(buy_score, 0.95),
-                'dominant_strategy': max(results.items(), key=lambda x: x[1]['confidence'])[0]
-            }
-        elif sell_score > buy_score and sell_score > 0.4:
-            return {
-                'action': 'SELL',
-                'confidence': min(sell_score, 0.95),
-                'dominant_strategy': max(results.items(), key=lambda x: x[1]['confidence'])[0]
-            }
-        else:
-            return {
-                'action': 'HOLD',
-                'confidence': 0.3,
-                'dominant_strategy': 'mixed'
-            }
-            
-    def calculate_risk_metrics(self, df: pd.DataFrame, action: str, price: float) -> Dict:
-        """Calculate stop loss, take profit, and risk score"""
-        atr = df['ATR'].iloc[-1]
-        
-        if action == 'BUY':
-            stop_loss = price - (atr * 1.5)
-            take_profit = price + (atr * 2.5)
-            potential_return = ((take_profit - price) / price) * 100
         else:  # SELL
-            stop_loss = price + (atr * 1.5)
-            take_profit = price - (atr * 2.5)
-            potential_return = ((price - take_profit) / price) * 100
+            pos = self.positions[symbol]
             
-        # Risk score based on volatility and market conditions
-        volatility = atr / price
-        risk_score = min(volatility * 10, 1.0)
+            # Calculate PnL
+            pnl = (price - pos.entry_price) * quantity
+            self.total_pnl += pnl
+            
+            if pnl > 0:
+                self.winning_trades += 1
+            else:
+                self.losing_trades += 1
+            
+            # Update cash
+            self.cash += quantity * price
+            
+            # Update or remove position
+            pos.quantity -= quantity
+            if pos.quantity == 0:
+                del self.positions[symbol]
+            else:
+                pos.current_price = price
+        
+        # Record trade
+        trade = Trade(
+            id=trade_id,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            timestamp=datetime.now(),
+            strategy=strategy,
+            pnl=pnl if side == "SELL" else 0
+        )
+        
+        self.trades.append(trade)
+        self.total_trades += 1
+        
+        # Update performance metrics
+        self.update_metrics()
         
         return {
-            'stop_loss': round(stop_loss, 2),
-            'take_profit': round(take_profit, 2),
-            'potential_return': round(potential_return, 2),
-            'risk_score': round(risk_score, 3)
-        }
-        
-    async def analyze_stock(self, symbol: str) -> Optional[Signal]:
-        """Complete analysis of a single stock"""
-        try:
-            # Fetch data
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period="2mo", interval="1h")
-            
-            if len(df) < 50:
-                return None
-                
-            # Calculate indicators
-            df = self.calculate_indicators(df)
-            
-            # Run all strategies
-            strategies = {
-                'trend_following': self.trend_following_strategy(df),
-                'mean_reversion': self.mean_reversion_strategy(df),
-                'momentum': self.momentum_strategy(df),
-                'volume_breakout': self.volume_breakout_strategy(df),
-                'support_resistance': self.support_resistance_strategy(df)
+            "success": True,
+            "trade_id": trade_id,
+            "executed": {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "price": price
             }
-            
-            # Combine signals
-            final_signal = self.combine_strategies(strategies)
-            
-            # ML Enhancement (optional)
-            try:
-                from ml_brain import ml_brain
+        }
+    
+    def update_positions(self, market_prices: Dict[str, float]):
+        """Update position prices and calculate unrealized PnL"""
+        for symbol, pos in self.positions.items():
+            if symbol in market_prices:
+                pos.current_price = market_prices[symbol]
+                pos.unrealized_pnl = (pos.current_price - pos.entry_price) * pos.quantity
+    
+    def check_stop_losses(self) -> List[Dict]:
+        """Check and execute stop losses"""
+        stops_hit = []
+        
+        for symbol, pos in list(self.positions.items()):
+            if pos.current_price <= pos.stop_loss:
+                # Execute stop loss
+                result = self.execute_trade(
+                    symbol=symbol,
+                    side="SELL",
+                    quantity=pos.quantity,
+                    price=pos.current_price,
+                    strategy="stop_loss"
+                )
                 
-                # Prepare market data for ML
-                ml_market_data = {
-                    'rsi': df['RSI'].iloc[-1],
-                    'macd': df['MACD'].iloc[-1],
-                    'volume_ratio': df['Volume_ratio'].iloc[-1],
-                    'momentum_5': df['Momentum_5'].iloc[-1],
-                    'momentum_10': df['Momentum_10'].iloc[-1],
-                    'sma_20': df['SMA_20'].iloc[-1],
-                    'sma_50': df['SMA_50'].iloc[-1],
-                    'atr': df['ATR'].iloc[-1],
-                    'volatility': df['ATR'].iloc[-1] / df['Close'].iloc[-1],
-                    'bb_position': df['BB_position'].iloc[-1]
+                if result["success"]:
+                    stops_hit.append({
+                        "symbol": symbol,
+                        "price": pos.current_price,
+                        "loss": (pos.current_price - pos.entry_price) * pos.quantity
+                    })
+                    logger.warning(f"Stop loss hit: {symbol} at ${pos.current_price:.2f}")
+        
+        return stops_hit
+    
+    def check_take_profits(self) -> List[Dict]:
+        """Check and execute take profits"""
+        profits_taken = []
+        
+        for symbol, pos in list(self.positions.items()):
+            if pos.current_price >= pos.take_profit:
+                # Execute take profit
+                result = self.execute_trade(
+                    symbol=symbol,
+                    side="SELL",
+                    quantity=pos.quantity,
+                    price=pos.current_price,
+                    strategy="take_profit"
+                )
+                
+                if result["success"]:
+                    profits_taken.append({
+                        "symbol": symbol,
+                        "price": pos.current_price,
+                        "profit": (pos.current_price - pos.entry_price) * pos.quantity
+                    })
+                    logger.info(f"Take profit hit: {symbol} at ${pos.current_price:.2f}")
+        
+        return profits_taken
+    
+    def calculate_daily_pnl(self) -> float:
+        """Calculate today's PnL"""
+        today = datetime.now().date()
+        daily_pnl = 0.0
+        
+        for trade in self.trades:
+            if trade.timestamp.date() == today:
+                daily_pnl += trade.pnl
+        
+        # Add unrealized PnL
+        for pos in self.positions.values():
+            daily_pnl += pos.unrealized_pnl
+        
+        return daily_pnl
+    
+    def update_metrics(self):
+        """Update performance metrics"""
+        current_value = self.get_portfolio_value()
+        
+        # Update peak and drawdown
+        if current_value > self.peak_value:
+            self.peak_value = current_value
+        
+        drawdown = (self.peak_value - current_value) / self.peak_value
+        self.max_drawdown = max(self.max_drawdown, drawdown)
+        
+        # Calculate daily return
+        daily_return = (current_value - self.initial_capital) / self.initial_capital
+        self.daily_returns.append(daily_return)
+        
+        # Calculate Sharpe ratio
+        if len(self.daily_returns) > 1:
+            returns_array = np.array(self.daily_returns)
+            avg_return = np.mean(returns_array)
+            std_return = np.std(returns_array)
+            if std_return > 0:
+                self.sharpe_ratio = (avg_return * 252) / (std_return * np.sqrt(252))
+    
+    def get_performance_report(self) -> Dict:
+        """Generate comprehensive performance report"""
+        total_value = self.get_portfolio_value()
+        total_return = (total_value - self.initial_capital) / self.initial_capital
+        
+        win_rate = self.winning_trades / max(1, self.total_trades)
+        
+        return {
+            "portfolio_value": total_value,
+            "cash": self.cash,
+            "positions_count": len(self.positions),
+            "total_return": f"{total_return:.2%}",
+            "total_pnl": self.total_pnl,
+            "total_trades": self.total_trades,
+            "win_rate": f"{win_rate:.2%}",
+            "winning_trades": self.winning_trades,
+            "losing_trades": self.losing_trades,
+            "max_drawdown": f"{self.max_drawdown:.2%}",
+            "sharpe_ratio": round(self.sharpe_ratio, 2),
+            "daily_pnl": self.calculate_daily_pnl(),
+            "positions": [
+                {
+                    "symbol": pos.symbol,
+                    "quantity": pos.quantity,
+                    "entry_price": pos.entry_price,
+                    "current_price": pos.current_price,
+                    "unrealized_pnl": pos.unrealized_pnl,
+                    "pnl_percent": f"{(pos.current_price/pos.entry_price - 1):.2%}"
                 }
-                
-                # Get ML prediction
-                ml_prediction = ml_brain.predict(ml_market_data)
-                
-                # If ML has high confidence, override traditional signal
-                if ml_prediction['ml_powered'] and ml_prediction['confidence'] > 0.8:
-                    final_signal['action'] = ml_prediction['action']
-                    final_signal['confidence'] = ml_prediction['confidence']
-                    final_signal['dominant_strategy'] = 'ML_' + final_signal['dominant_strategy']
-                    
-                    logging.info(f"ML Override for {symbol}: {ml_prediction['action']} ({ml_prediction['confidence']:.2f})")
-            except Exception as e:
-                logging.debug(f"ML prediction failed (not critical): {e}")
-                
-            if final_signal['action'] == 'HOLD':
-                return None
-                
-            # Get current price and calculate risk metrics
-            current_price = df['Close'].iloc[-1]
-            risk_metrics = self.calculate_risk_metrics(df, final_signal['action'], current_price)
-            
-            # Create explanation
-            explanation = self.generate_explanation(
-                final_signal['action'],
-                final_signal['dominant_strategy'],
-                df.iloc[-1],
-                final_signal['confidence']
-            )
-            
-            # Create signal object
-            signal = Signal(
-                symbol=symbol,
-                action=final_signal['action'],
-                price=round(current_price, 2),
-                confidence=round(final_signal['confidence'], 3),
-                risk_score=risk_metrics['risk_score'],
-                strategy=final_signal['dominant_strategy'],
-                explanation=explanation,
-                rsi=round(df['RSI'].iloc[-1], 1),
-                volume_ratio=round(df['Volume_ratio'].iloc[-1], 2),
-                momentum=round(df['Momentum_5'].iloc[-1] * 100, 2),
-                timestamp=datetime.now().isoformat(),
-                potential_return=risk_metrics['potential_return'],
-                stop_loss=risk_metrics['stop_loss'],
-                take_profit=risk_metrics['take_profit']
-            )
-            
-            # Track signal
-            self.signal_history.append(signal)
-            
-            return signal
-            
-        except Exception as e:
-            logging.error(f"Error analyzing {symbol}: {e}")
-            return None
-            
-    def generate_explanation(self, action: str, strategy: str, latest_data: pd.Series, confidence: float) -> str:
-        """Generate human-readable explanation for signal"""
-        explanations = []
-        
-        if action == 'BUY':
-            if latest_data['RSI'] < 30:
-                explanations.append(f"Oversold (RSI: {latest_data['RSI']:.1f})")
-            if latest_data['Close'] > latest_data['SMA_20']:
-                explanations.append("Price above 20-day average")
-            if latest_data['Volume_ratio'] > 1.5:
-                explanations.append(f"High volume ({latest_data['Volume_ratio']:.1f}x average)")
-            if latest_data['Momentum_5'] > 0.02:
-                explanations.append(f"Strong momentum ({latest_data['Momentum_5']*100:.1f}%)")
-                
-        elif action == 'SELL':
-            if latest_data['RSI'] > 70:
-                explanations.append(f"Overbought (RSI: {latest_data['RSI']:.1f})")
-            if latest_data['Close'] < latest_data['SMA_20']:
-                explanations.append("Price below 20-day average")
-            if latest_data['BB_position'] > 0.9:
-                explanations.append("At upper Bollinger Band")
-            if latest_data['Momentum_5'] < -0.02:
-                explanations.append(f"Negative momentum ({latest_data['Momentum_5']*100:.1f}%)")
-                
-        explanation = f"{action} signal from {strategy} strategy ({confidence*100:.0f}% confidence). "
-        explanation += "Key factors: " + ", ".join(explanations[:3]) if explanations else "Multiple technical confirmations"
-        
-        return explanation
-        
-    async def scan_stocks(self, symbols: List[str]) -> List[Signal]:
-        """Scan multiple stocks for signals"""
-        signals = []
-        
-        for symbol in symbols:
-            logging.info(f"Analyzing {symbol}...")
-            signal = await self.analyze_stock(symbol)
-            if signal:
-                signals.append(signal)
-                
-        # Sort by confidence
-        signals.sort(key=lambda x: x.confidence, reverse=True)
-        
-        # Calculate win rate if we have history
-        if len(self.signal_history) > 20:
-            self.calculate_performance()
-            
-        return signals
-        
-    def calculate_performance(self):
-        """Calculate historical performance metrics"""
-        # This would track actual performance in production
-        # For now, simulate based on historical signals
-        recent_signals = list(self.signal_history)[-100:]
-        wins = sum(1 for s in recent_signals if s.confidence > 0.7)
-        self.win_rate = wins / len(recent_signals) if recent_signals else 0
-        
-    async def execute_trade(self, signal: Signal, quantity: int) -> Dict:
-        """Execute trade via Alpaca API"""
-        headers = {
-            'APCA-API-KEY-ID': self.api_key,
-            'APCA-API-SECRET-KEY': self.api_secret,
-            'Content-Type': 'application/json'
+                for pos in self.positions.values()
+            ]
         }
+
+class AdvancedTradingEngine:
+    """Main trading engine orchestrating all components"""
+    
+    def __init__(self, api_key: str = None, api_secret: str = None):
+        self.portfolio = CentralizedPortfolio()
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.is_live = api_key and api_secret and api_key != "test"
         
-        order_data = {
-            'symbol': signal.symbol,
-            'qty': quantity,
-            'side': 'buy' if signal.action == 'BUY' else 'sell',
-            'type': 'limit',
-            'limit_price': signal.price,
-            'time_in_force': 'day',
-            'order_class': 'bracket',
-            'stop_loss': {'stop_price': signal.stop_loss},
-            'take_profit': {'limit_price': signal.take_profit}
-        }
+    async def process_signal(self, signal: Dict) -> Dict:
+        """Process a trading signal through the portfolio"""
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.base_url}/v2/orders",
-                    headers=headers,
-                    json=order_data
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        logging.info(f"Trade executed: {signal.action} {quantity} {signal.symbol} @ ${signal.price}")
-                        return {'success': True, 'order': result}
-                    else:
-                        error = await resp.text()
-                        logging.error(f"Trade failed: {error}")
-                        return {'success': False, 'error': error}
-        except Exception as e:
-            logging.error(f"Execution error: {e}")
-            return {'success': False, 'error': str(e)}
+        # Extract signal details
+        symbol = signal.get("symbol")
+        action = signal.get("action")
+        price = signal.get("price", 0)
+        confidence = signal.get("confidence", 0.5)
+        stop_loss = signal.get("stop_loss")
+        take_profit = signal.get("take_profit")
+        
+        if action == "HOLD":
+            return {"success": False, "reason": "No action signal"}
+        
+        # Calculate position size
+        quantity = self.portfolio.get_position_size(symbol, price, confidence)
+        
+        if quantity == 0:
+            return {"success": False, "reason": "Position size too small"}
+        
+        # Execute trade
+        result = self.portfolio.execute_trade(
+            symbol=symbol,
+            side="BUY" if action == "BUY" else "SELL",
+            quantity=quantity,
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            strategy=signal.get("strategy", "signal")
+        )
+        
+        return result
+    
+    def get_portfolio_status(self) -> Dict:
+        """Get current portfolio status"""
+        return self.portfolio.get_performance_report()
