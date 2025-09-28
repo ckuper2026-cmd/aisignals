@@ -1,428 +1,401 @@
 """
-Advanced Machine Learning Brain for AI Trading Platform
-This module provides self-improving ML capabilities
-Location: Save as ml_brain.py in your project root
+Simplified ML Brain for Trading Platform
+Designed for reliability and future extensibility
 """
 
 import numpy as np
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-import xgboost as xgb
-import joblib
+from collections import deque
 import json
 import os
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
-import asyncio
+from datetime import datetime
+from typing import Dict, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
-class AdvancedMLBrain:
-    """Self-improving ML system that learns from market data"""
+# Try to import sklearn, but continue without it if not available
+try:
+    from sklearn.ensemble import RandomForestClassifier
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    logger.warning("scikit-learn not available - ML features will be limited")
+    SKLEARN_AVAILABLE = False
+    RandomForestClassifier = None
+
+class SimpleMLBrain:
+    """
+    Simplified ML system - single model, clear extension points
+    Easy to enhance with new features when proven stable
+    """
     
     def __init__(self):
-        self.models = {
-            'random_forest': None,
-            'gradient_boost': None,
-            'neural_network': None,
-            'xgboost': None
-        }
-        
-        self.model_weights = {
-            'random_forest': 0.25,
-            'gradient_boost': 0.25,
-            'neural_network': 0.25,
-            'xgboost': 0.25
-        }
-        
-        self.scaler = StandardScaler()
+        # Core model - start simple
+        self.model = None
         self.is_trained = False
-        self.training_data = []
-        self.prediction_history = []
-        self.accuracy_scores = {model: [] for model in self.models}
         
-        # Auto-load saved models if they exist
-        self.load_models()
+        # Data storage
+        self.trade_history = deque(maxlen=1000)
+        self.min_samples_to_train = 30  # Low threshold to start
         
-    def prepare_features(self, market_data: Dict) -> np.ndarray:
-        """Convert market data into ML features"""
+        # Performance tracking
+        self.predictions_correct = 0
+        self.predictions_total = 0
+        self.last_train_time = datetime.now()
+        
+        # EXTENSION POINT 1: Additional models can be added here
+        # self.advanced_models = {}  # Uncomment when ready
+        
+        # EXTENSION POINT 2: Feature sets for future use
+        self.feature_version = "v1"  # Track feature evolution
+        
+        # Load any existing model
+        self.load_model()
+    
+    def extract_features(self, market_data: Dict) -> List[float]:
+        """
+        Extract features - EASY TO EXTEND
+        Just add new features to the list
+        """
         features = []
         
-        # Price features
-        features.append(market_data.get('rsi', 50) / 100)
-        features.append(market_data.get('macd', 0))
-        features.append(market_data.get('bb_position', 0.5))
-        features.append(market_data.get('volume_ratio', 1))
+        # === BASIC FEATURES (v1) ===
         
-        # Momentum features
-        features.append(market_data.get('momentum_5', 0))
-        features.append(market_data.get('momentum_10', 0))
+        # 1. Price position (0-1 scale)
+        if 'current_price' in market_data and 'day_high' in market_data and 'day_low' in market_data:
+            price_range = market_data['day_high'] - market_data['day_low']
+            if price_range > 0:
+                price_position = (market_data['current_price'] - market_data['day_low']) / price_range
+                features.append(min(max(price_position, 0), 1))
+            else:
+                features.append(0.5)
+        else:
+            features.append(0.5)
         
-        # Trend features
-        features.append(1 if market_data.get('sma_20', 0) > market_data.get('sma_50', 0) else 0)
-        features.append(market_data.get('adx', 25) / 100)
+        # 2. Volume ratio (capped at 3)
+        volume_ratio = market_data.get('volume_ratio', 1.0)
+        features.append(min(volume_ratio, 3.0))
         
-        # Volatility
-        features.append(market_data.get('atr', 0))
-        features.append(market_data.get('volatility', 0))
+        # 3. RSI normalized (0-1)
+        rsi = market_data.get('rsi', 50)
+        features.append(rsi / 100.0)
         
-        # Time features (market session, day of week)
-        now = datetime.now()
-        features.append(now.hour / 24)  # Normalized hour
-        features.append(now.weekday() / 7)  # Normalized day
+        # 4. Price change 5 min (capped at ±5%)
+        change_5min = market_data.get('change_5min', 0)
+        features.append(max(min(change_5min, 0.05), -0.05) + 0.05)
         
-        return np.array(features).reshape(1, -1)
-    
-    def train_models(self, force_retrain: bool = False):
-        """Train all ML models on collected data"""
-        if len(self.training_data) < 100 and not force_retrain:
-            logger.info(f"Not enough data to train: {len(self.training_data)} samples")
-            return False
+        # 5. Hour of day (0-1)
+        hour = datetime.now().hour
+        market_hour = max(0, min(hour - 9, 7)) / 7
+        features.append(market_hour)
         
-        logger.info(f"Training models with {len(self.training_data)} samples...")
+        # 6. Day of week (Monday=0, Friday=1)
+        day = datetime.now().weekday()
+        features.append(min(day / 4, 1))
         
-        # Prepare training data
-        X = np.array([d['features'] for d in self.training_data])
-        y = np.array([d['label'] for d in self.training_data])
+        # === EXTENSION POINT: Add v2 features here when ready ===
+        # if self.feature_version == "v2":
+        #     features.append(market_data.get('vwap_distance', 0))
+        #     features.append(market_data.get('sector_strength', 0))
+        #     features.append(market_data.get('market_regime', 0))
         
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-        
-        # Scale features
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
-        
-        # Train Random Forest
-        self.models['random_forest'] = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=10,
-            min_samples_split=5,
-            random_state=42
-        )
-        self.models['random_forest'].fit(X_train_scaled, y_train)
-        rf_score = self.models['random_forest'].score(X_test_scaled, y_test)
-        
-        # Train Gradient Boosting
-        self.models['gradient_boost'] = GradientBoostingClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
-            random_state=42
-        )
-        self.models['gradient_boost'].fit(X_train_scaled, y_train)
-        gb_score = self.models['gradient_boost'].score(X_test_scaled, y_test)
-        
-        # Train Neural Network
-        self.models['neural_network'] = MLPClassifier(
-            hidden_layer_sizes=(100, 50, 25),
-            activation='relu',
-            solver='adam',
-            max_iter=500,
-            random_state=42
-        )
-        self.models['neural_network'].fit(X_train_scaled, y_train)
-        nn_score = self.models['neural_network'].score(X_test_scaled, y_test)
-        
-        # Train XGBoost
-        self.models['xgboost'] = xgb.XGBClassifier(
-            n_estimators=100,
-            max_depth=6,
-            learning_rate=0.1,
-            random_state=42,
-            use_label_encoder=False,
-            eval_metric='logloss'
-        )
-        self.models['xgboost'].fit(X_train_scaled, y_train)
-        xgb_score = self.models['xgboost'].score(X_test_scaled, y_test)
-        
-        # Update model weights based on performance
-        scores = {
-            'random_forest': rf_score,
-            'gradient_boost': gb_score,
-            'neural_network': nn_score,
-            'xgboost': xgb_score
-        }
-        
-        # Normalize weights based on accuracy
-        total_score = sum(scores.values())
-        for model, score in scores.items():
-            self.model_weights[model] = score / total_score
-            self.accuracy_scores[model].append(score)
-        
-        self.is_trained = True
-        logger.info(f"Training complete! Scores: {scores}")
-        
-        # Save models
-        self.save_models()
-        
-        return True
+        return features
     
     def predict(self, market_data: Dict) -> Dict:
-        """Make ensemble prediction using all models"""
-        if not self.is_trained:
-            # Return basic prediction if models not trained
+        """
+        Make prediction - EXTENSIBLE
+        Can add confidence adjustments, multi-model voting, etc.
+        """
+        
+        # If sklearn not available, use rule-based fallback
+        if not SKLEARN_AVAILABLE:
+            # Simple rule-based logic
+            rsi = market_data.get('rsi', 50)
+            volume_ratio = market_data.get('volume_ratio', 1.0)
+            
+            action = 'NEUTRAL'
+            confidence = 0.5
+            
+            if rsi < 30 and volume_ratio > 1.5:
+                action = 'BUY'
+                confidence = 0.65
+            elif rsi > 70 and volume_ratio > 1.5:
+                action = 'SELL'
+                confidence = 0.65
+            
             return {
-                'action': 'HOLD',
-                'confidence': 0.5,
-                'ml_powered': False,
-                'reason': 'ML models still learning'
+                'action': action,
+                'confidence': confidence,
+                'ml_active': False,
+                'win_rate': 0.5,
+                'reason': f'Rule-based (no sklearn): RSI={rsi:.0f}',
+                'feature_version': self.feature_version
             }
         
-        # Prepare features
-        features = self.prepare_features(market_data)
-        features_scaled = self.scaler.transform(features)
+        # Not trained yet - return neutral
+        if not self.is_trained:
+            return {
+                'action': 'NEUTRAL',
+                'confidence': 0.0,
+                'ml_active': False,
+                'reason': f'Learning... ({len(self.trade_history)}/{self.min_samples_to_train} samples)'
+            }
         
-        # Get predictions from all models
-        predictions = {}
-        probabilities = {}
-        
-        for model_name, model in self.models.items():
-            if model is not None:
-                pred = model.predict(features_scaled)[0]
-                prob = model.predict_proba(features_scaled)[0]
-                predictions[model_name] = pred
-                probabilities[model_name] = max(prob)
-        
-        # Weighted ensemble voting
-        buy_score = 0
-        sell_score = 0
-        hold_score = 0
-        
-        for model_name, pred in predictions.items():
-            weight = self.model_weights[model_name]
-            confidence = probabilities[model_name]
+        try:
+            # Extract features
+            features = self.extract_features(market_data)
             
-            if pred == 1:  # Buy
-                buy_score += weight * confidence
-            elif pred == -1:  # Sell
-                sell_score += weight * confidence
-            else:  # Hold
-                hold_score += weight * confidence
+            # Basic prediction
+            prediction = self.model.predict([features])[0]
+            probabilities = self.model.predict_proba([features])[0]
+            confidence = max(probabilities)
+            
+            # Convert to action
+            if prediction == 1:
+                action = 'BUY'
+            elif prediction == -1:
+                action = 'SELL'
+            else:
+                action = 'NEUTRAL'
+            
+            # === EXTENSION POINT: Advanced logic ===
+            # Could add:
+            # - Multi-timeframe confirmation
+            # - Risk adjustment based on market conditions
+            # - Ensemble voting if multiple models
+            
+            # Calculate win rate
+            win_rate = self.predictions_correct / max(self.predictions_total, 1)
+            
+            return {
+                'action': action,
+                'confidence': float(confidence),
+                'ml_active': True,
+                'win_rate': win_rate,
+                'reason': f'ML: {action} ({confidence:.1%} conf, {win_rate:.1%} accuracy)',
+                'feature_version': self.feature_version
+            }
+            
+        except Exception as e:
+            logger.error(f"ML prediction error: {e}")
+            return {
+                'action': 'NEUTRAL',
+                'confidence': 0.0,
+                'ml_active': False,
+                'reason': 'ML error - using strategies only'
+            }
+    
+    def record_trade(self, market_data: Dict, action: str, result: Optional[float] = None):
+        """
+        Record trade for learning - EXTENSIBLE
+        Can add more sophisticated outcome tracking
+        """
+        try:
+            features = self.extract_features(market_data)
+            
+            # Determine label
+            if result is not None:
+                if result > 0.5:  # Profitable
+                    label = 1 if action == 'BUY' else -1
+                elif result < -0.5:  # Loss
+                    label = -1 if action == 'BUY' else 1
+                else:  # Neutral
+                    label = 0
+            else:
+                label = 0  # No result yet
+            
+            # Store trade
+            self.trade_history.append({
+                'features': features,
+                'label': label,
+                'action': action,
+                'timestamp': datetime.now().isoformat(),
+                'result': result,
+                'feature_version': self.feature_version
+            })
+            
+            # === EXTENSION POINT: Advanced tracking ===
+            # Could add:
+            # - Market condition at time of trade
+            # - Correlated assets performance
+            # - News sentiment score
+            
+            # Retrain periodically
+            if len(self.trade_history) >= self.min_samples_to_train:
+                time_since_train = (datetime.now() - self.last_train_time).seconds
+                if time_since_train > 1800:  # 30 minutes
+                    self.train()
+                    
+        except Exception as e:
+            logger.error(f"Error recording trade: {e}")
+    
+    def train(self):
+        """
+        Train model - EXTENSIBLE
+        Easy to add new algorithms or ensemble methods
+        """
+        if not SKLEARN_AVAILABLE:
+            logger.warning("Training skipped - scikit-learn not available")
+            return False
+            
+        try:
+            # Need minimum samples
+            if len(self.trade_history) < self.min_samples_to_train:
+                return False
+            
+            # Get trades with results
+            trades_with_results = [t for t in self.trade_history if t.get('result') is not None]
+            
+            if len(trades_with_results) < 20:
+                logger.info(f"Only {len(trades_with_results)} trades with results")
+                return False
+            
+            # Prepare data
+            X = np.array([t['features'] for t in trades_with_results])
+            y = np.array([t['label'] for t in trades_with_results])
+            
+            # Train Random Forest (simple and robust)
+            self.model = RandomForestClassifier(
+                n_estimators=50,  # Moderate number of trees
+                max_depth=5,      # Shallow to avoid overfitting
+                min_samples_split=10,
+                random_state=42
+            )
+            
+            self.model.fit(X, y)
+            
+            # === EXTENSION POINT: Advanced models ===
+            # When ready, can add:
+            # - XGBoost for better accuracy
+            # - Neural network for complex patterns
+            # - Ensemble voting between models
+            
+            # Calculate training accuracy
+            predictions = self.model.predict(X)
+            accuracy = np.mean(predictions == y)
+            
+            self.is_trained = True
+            self.last_train_time = datetime.now()
+            
+            logger.info(f"ML trained on {len(X)} samples, accuracy: {accuracy:.1%}")
+            
+            # Save model
+            self.save_model()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Training error: {e}")
+            return False
+    
+    def evaluate_prediction(self, prediction: Dict, actual_result: float):
+        """
+        Evaluate prediction accuracy - EXTENSIBLE
+        Can add more sophisticated metrics
+        """
+        self.predictions_total += 1
         
-        # Determine final action
-        max_score = max(buy_score, sell_score, hold_score)
+        # Simple evaluation
+        if prediction.get('action') == 'BUY' and actual_result > 0:
+            self.predictions_correct += 1
+        elif prediction.get('action') == 'SELL' and actual_result < 0:
+            self.predictions_correct += 1
+        elif prediction.get('action') == 'NEUTRAL' and abs(actual_result) < 0.5:
+            self.predictions_correct += 1
         
-        if max_score == buy_score and buy_score > 0.6:
-            action = 'BUY'
-            confidence = buy_score
-        elif max_score == sell_score and sell_score > 0.6:
-            action = 'SELL'
-            confidence = sell_score
-        else:
-            action = 'HOLD'
-            confidence = hold_score
-        
-        # Record prediction for learning
-        prediction_record = {
-            'timestamp': datetime.now().isoformat(),
-            'features': features.tolist(),
-            'prediction': action,
-            'confidence': confidence,
-            'model_scores': predictions,
-            'market_data': market_data
-        }
-        self.prediction_history.append(prediction_record)
-        
+        # === EXTENSION POINT: Advanced metrics ===
+        # Could track:
+        # - Profit factor
+        # - Sharpe ratio contribution
+        # - Maximum drawdown impact
+    
+    def get_stats(self) -> Dict:
+        """Get current statistics"""
         return {
-            'action': action,
-            'confidence': min(confidence, 0.95),
-            'ml_powered': True,
-            'models_agree': len(set(predictions.values())) == 1,
-            'best_model': max(self.accuracy_scores, key=lambda k: self.accuracy_scores[k][-1] if self.accuracy_scores[k] else 0),
-            'reason': self.generate_explanation(action, predictions, market_data)
+            'is_trained': self.is_trained,
+            'total_trades': len(self.trade_history),
+            'trades_with_results': len([t for t in self.trade_history if t.get('result') is not None]),
+            'accuracy': self.predictions_correct / max(self.predictions_total, 1),
+            'predictions_made': self.predictions_total,
+            'model_type': 'RandomForest' if SKLEARN_AVAILABLE else 'RuleBased',
+            'feature_version': self.feature_version,
+            'last_train': self.last_train_time.isoformat() if self.last_train_time else None,
+            'extensible': True,
+            'sklearn_available': SKLEARN_AVAILABLE
         }
     
-    def generate_explanation(self, action: str, predictions: Dict, market_data: Dict) -> str:
-        """Generate human-readable explanation for prediction"""
-        explanations = []
-        
-        if action == 'BUY':
-            if market_data.get('rsi', 50) < 30:
-                explanations.append("Oversold conditions detected")
-            if market_data.get('momentum_5', 0) > 0.02:
-                explanations.append("Strong positive momentum")
-            if len(set(predictions.values())) == 1:
-                explanations.append("All models agree on buy signal")
-        elif action == 'SELL':
-            if market_data.get('rsi', 50) > 70:
-                explanations.append("Overbought conditions detected")
-            if market_data.get('momentum_5', 0) < -0.02:
-                explanations.append("Strong negative momentum")
-        else:
-            explanations.append("No clear signal from ML models")
-        
-        models_voting_buy = sum(1 for p in predictions.values() if p == 1)
-        models_voting_sell = sum(1 for p in predictions.values() if p == -1)
-        explanations.append(f"{models_voting_buy} models vote BUY, {models_voting_sell} vote SELL")
-        
-        return " | ".join(explanations)
-    
-    def add_training_sample(self, features: np.ndarray, outcome: str):
-        """Add new training sample from actual market outcome"""
-        # Convert outcome to label
-        if outcome == 'profitable':
-            label = 1  # Buy was correct
-        elif outcome == 'loss':
-            label = -1  # Sell was correct
-        else:
-            label = 0  # Hold was correct
-        
-        self.training_data.append({
-            'features': features.flatten(),
-            'label': label,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        # Retrain if we have enough new samples
-        if len(self.training_data) % 50 == 0:
-            logger.info(f"Auto-retraining with {len(self.training_data)} samples")
-            self.train_models()
-    
-    def evaluate_prediction(self, prediction_id: str, actual_outcome: str):
-        """Evaluate how well the prediction performed"""
-        # Find the prediction
-        for pred in self.prediction_history[-100:]:  # Check last 100 predictions
-            if pred['timestamp'] == prediction_id:
-                # Determine if prediction was correct
-                correct = False
-                if pred['prediction'] == 'BUY' and actual_outcome == 'profitable':
-                    correct = True
-                elif pred['prediction'] == 'SELL' and actual_outcome == 'profitable':
-                    correct = True
-                elif pred['prediction'] == 'HOLD' and actual_outcome == 'neutral':
-                    correct = True
+    def save_model(self):
+        """Save model and stats"""
+        try:
+            os.makedirs('ml_models', exist_ok=True)
+            
+            # Only save model if sklearn is available and model exists
+            if SKLEARN_AVAILABLE and self.model:
+                try:
+                    import joblib
+                    joblib.dump(self.model, 'ml_models/simple_model.pkl')
+                except ImportError:
+                    logger.warning("joblib not available - model not saved")
+            
+            # Save stats and metadata
+            stats = {
+                'is_trained': self.is_trained,
+                'trades_recorded': len(self.trade_history),
+                'accuracy': self.predictions_correct / max(self.predictions_total, 1),
+                'feature_version': self.feature_version,
+                'saved_at': datetime.now().isoformat(),
+                'sklearn_available': SKLEARN_AVAILABLE
+            }
+            
+            with open('ml_models/stats.json', 'w') as f:
+                json.dump(stats, f)
                 
-                # Add training sample
-                self.add_training_sample(
-                    np.array(pred['features']),
-                    actual_outcome
-                )
+            logger.info("Model saved")
+            
+        except Exception as e:
+            logger.error(f"Save error: {e}")
+    
+    def load_model(self):
+        """Load existing model"""
+        try:
+            if SKLEARN_AVAILABLE and os.path.exists('ml_models/simple_model.pkl'):
+                try:
+                    import joblib
+                    self.model = joblib.load('ml_models/simple_model.pkl')
+                    self.is_trained = True
+                except ImportError:
+                    logger.warning("joblib not available - cannot load model")
                 
-                return correct
+                if os.path.exists('ml_models/stats.json'):
+                    with open('ml_models/stats.json', 'r') as f:
+                        stats = json.load(f)
+                        self.feature_version = stats.get('feature_version', 'v1')
+                        logger.info(f"Loaded model: {stats['accuracy']:.1%} accuracy, version {self.feature_version}")
+                
+                return True
+                
+        except Exception as e:
+            logger.error(f"Load error (starting fresh): {e}")
+            
         return False
     
-    def get_model_stats(self) -> Dict:
-        """Get current model performance statistics"""
-        stats = {
-            'is_trained': self.is_trained,
-            'training_samples': len(self.training_data),
-            'predictions_made': len(self.prediction_history),
-            'model_weights': self.model_weights,
-            'model_accuracies': {}
-        }
-        
-        for model, scores in self.accuracy_scores.items():
-            if scores:
-                stats['model_accuracies'][model] = {
-                    'current': scores[-1],
-                    'average': np.mean(scores),
-                    'improving': scores[-1] > scores[0] if len(scores) > 1 else False
-                }
-        
-        return stats
+    # === FUTURE EXTENSION METHODS ===
+    # Easy to add when ready:
     
-    def save_models(self):
-        """Save trained models to disk"""
-        try:
-            os.makedirs('models', exist_ok=True)
-            
-            # Save each model
-            for name, model in self.models.items():
-                if model is not None:
-                    joblib.dump(model, f'models/{name}.pkl')
-            
-            # Save scaler
-            joblib.dump(self.scaler, 'models/scaler.pkl')
-            
-            # Save metadata
-            metadata = {
-                'model_weights': self.model_weights,
-                'is_trained': self.is_trained,
-                'training_samples': len(self.training_data),
-                'accuracy_scores': {k: v[-10:] for k, v in self.accuracy_scores.items()},
-                'saved_at': datetime.now().isoformat()
-            }
-            
-            with open('models/metadata.json', 'w') as f:
-                json.dump(metadata, f)
-            
-            logger.info("Models saved successfully")
-            
-        except Exception as e:
-            logger.error(f"Error saving models: {e}")
+    def add_advanced_model(self, name: str, model):
+        """Add additional models for ensemble - FUTURE"""
+        pass
     
-    def load_models(self):
-        """Load previously trained models"""
-        try:
-            if not os.path.exists('models'):
-                logger.info("No saved models found")
-                return
-            
-            # Load models
-            for name in self.models.keys():
-                model_path = f'models/{name}.pkl'
-                if os.path.exists(model_path):
-                    self.models[name] = joblib.load(model_path)
-                    logger.info(f"Loaded {name} model")
-            
-            # Load scaler
-            if os.path.exists('models/scaler.pkl'):
-                self.scaler = joblib.load('models/scaler.pkl')
-            
-            # Load metadata
-            if os.path.exists('models/metadata.json'):
-                with open('models/metadata.json', 'r') as f:
-                    metadata = json.load(f)
-                    self.model_weights = metadata['model_weights']
-                    self.is_trained = metadata['is_trained']
-                    self.accuracy_scores = metadata.get('accuracy_scores', {})
-                    logger.info(f"Loaded ML brain: {metadata['training_samples']} training samples")
-            
-        except Exception as e:
-            logger.error(f"Error loading models: {e}")
+    def add_feature_extractor(self, name: str, extractor):
+        """Add custom feature extractors - FUTURE"""
+        pass
     
-    async def continuous_learning_loop(self):
-        """Background task for continuous model improvement"""
-        while True:
-            await asyncio.sleep(3600)  # Every hour
-            
-            # Retrain if we have new data
-            if len(self.training_data) >= 100:
-                logger.info("Hourly retraining triggered")
-                self.train_models()
-            
-            # Clean old prediction history
-            if len(self.prediction_history) > 10000:
-                self.prediction_history = self.prediction_history[-5000:]
-            
-            # Log stats
-            stats = self.get_model_stats()
-            logger.info(f"ML Brain Stats: {stats}")
-
-
-# Singleton instance
-ml_brain = AdvancedMLBrain()
-
-
-async def generate_ml_prediction(market_data: Dict) -> Dict:
-    """Generate prediction using ML brain"""
-    return ml_brain.predict(market_data)
-
-
-async def train_ml_models(data: List[Dict]):
-    """Train ML models with historical data"""
-    for sample in data:
-        ml_brain.training_data.append(sample)
+    def enable_deep_learning(self):
+        """Enable neural network predictions - FUTURE"""
+        pass
     
-    return ml_brain.train_models()
+    def enable_reinforcement_learning(self):
+        """Enable RL for strategy optimization - FUTURE"""
+        pass
 
-
-def get_ml_stats() -> Dict:
-    """Get ML system statistics"""
-    return ml_brain.get_model_stats()
+# Global instance
+ml_brain = SimpleMLBrain()

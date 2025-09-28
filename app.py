@@ -6,6 +6,7 @@ Integrates multiple strategies that work together, not replace each other
 import os
 import asyncio
 import json
+import csv
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple, Any
@@ -17,6 +18,13 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging FIRST
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # FastAPI imports
 from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect
@@ -30,21 +38,18 @@ import pytz
 from collections import deque
 
 # Import ML brain for learning
+ML_ENABLED = False
+ml_brain = None
+
 try:
-    from ml_brain import SimpleMLBrain, ml_brain
+    from ml_brain import SimpleMLBrain
+    ml_brain = SimpleMLBrain()  # Create instance explicitly
     ML_ENABLED = True
     logger.info("Simple ML Brain loaded successfully")
+except ImportError as e:
+    logger.warning(f"ML Brain import error: {e}")
 except Exception as e:
-    logger.warning(f"ML Brain not available: {e}")
-    ML_ENABLED = False
-    ml_brain = None
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+    logger.warning(f"ML Brain initialization error: {e}")
 
 # Initialize FastAPI
 app = FastAPI(
@@ -478,16 +483,76 @@ class StrategyAggregator:
 # ============================================
 
 class EnhancedPortfolio:
+    """SIMULATED PORTFOLIO - Testing AI performance with real data, no actual trades"""
     def __init__(self, initial_capital: float = 100000):
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.positions = {}
+        self.positions = {}  # Simulated positions only
         self.trades = deque(maxlen=1000)
         self.pending_orders = {}
         self.strategy_aggregator = StrategyAggregator()
         self.last_trade_timestamp = time.time()  # Track last trade time
         self.trades_today_count = 0  # Track daily trades
+        self.is_simulated = True  # Flag for simulated trading
         
+        # Initialize trade logger
+        self.init_trade_logger()
+        logger.info("=" * 60)
+        logger.info("SIMULATED TRADING MODE - No real money involved")
+        logger.info("Testing AI signals with paper portfolio")
+        logger.info("=" * 60)
+        
+    def init_trade_logger(self):
+        """Initialize trade logging to CSV for analysis"""
+        try:
+            os.makedirs('trade_logs', exist_ok=True)
+            self.trade_log_file = f'trade_logs/trades_{datetime.now().strftime("%Y%m%d")}.csv'
+            
+            # Create CSV header if file doesn't exist
+            if not os.path.exists(self.trade_log_file):
+                import csv
+                with open(self.trade_log_file, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        'timestamp', 'symbol', 'action', 'quantity', 'price',
+                        'total_value', 'confidence', 'strategy', 'zone',
+                        'cash_before', 'cash_after', 'portfolio_value',
+                        'strategies_voting', 'ml_prediction', 'pnl'
+                    ])
+            logger.info(f"Trade logging initialized: {self.trade_log_file}")
+        except Exception as e:
+            logger.error(f"Failed to initialize trade logger: {e}")
+            self.trade_log_file = None
+    
+    def log_trade(self, trade_data: Dict):
+        """Log trade to CSV file"""
+        if not self.trade_log_file:
+            return
+            
+        try:
+            import csv
+            with open(self.trade_log_file, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    trade_data.get('timestamp', datetime.now().isoformat()),
+                    trade_data.get('symbol', ''),
+                    trade_data.get('action', ''),
+                    trade_data.get('quantity', 0),
+                    trade_data.get('price', 0),
+                    trade_data.get('total_value', 0),
+                    trade_data.get('confidence', 0),
+                    trade_data.get('strategy', ''),
+                    trade_data.get('zone', ''),
+                    trade_data.get('cash_before', self.cash),
+                    trade_data.get('cash_after', self.cash),
+                    trade_data.get('portfolio_value', self.get_total_value()),
+                    json.dumps(trade_data.get('strategies_voting', {})),
+                    trade_data.get('ml_prediction', ''),
+                    trade_data.get('pnl', 0)
+                ])
+        except Exception as e:
+            logger.error(f"Failed to log trade: {e}")
+    
     def track_trade_for_learning(self, trade: Dict):
         """Track trade for ML learning"""
         if ML_ENABLED and ml_brain:
@@ -587,6 +652,18 @@ class EnhancedPortfolio:
             }
             
             self.trades.append(trade)
+            
+            # Log trade to CSV
+            self.log_trade({
+                **trade,
+                'total_value': quantity * signal.price,
+                'strategy': list(signal.strategies_voting.keys())[0] if signal.strategies_voting else 'unknown',
+                'cash_before': self.cash + (quantity * signal.price if signal.primary_action == "BUY" else 0),
+                'cash_after': self.cash,
+                'portfolio_value': self.get_total_value(),
+                'strategies_voting': signal.strategies_voting,
+                'ml_prediction': 'ML' if 'ml_brain' in signal.strategies_voting else 'None'
+            })
             
             logger.info(f"Multi-strategy trade: {signal.primary_action} {quantity} {signal.symbol} @ ${signal.price:.2f}")
             
@@ -906,17 +983,25 @@ def is_market_open() -> bool:
 async def root():
     zone_name, zone_config = get_current_market_zone()
     return {
-        "platform": "Photon AI Trading - Enhanced Multi-Strategy",
+        "platform": "Photon AI Trading - Simulated Portfolio",
         "version": "2.1.0",
         "status": "operational",
+        "mode": "SIMULATED - Testing AI signals without real trades",
         "market_open": is_market_open(),
-        "portfolio_value": signal_generator.portfolio.get_total_value(),
+        "portfolio": {
+            "type": "Simulated",
+            "value": signal_generator.portfolio.get_total_value(),
+            "initial": 100000,
+            "is_real": False
+        },
         "current_zone": {
             "name": zone_name,
             "strategies": zone_config.get("strategies", []),
             "multiplier": zone_config.get("multiplier", 1.0),
             "threshold": zone_config.get("threshold", 0.5)
-        }
+        },
+        "data_source": "Yahoo Finance (real market data)",
+        "railway_app": "ai-signals.up.railway.app"
     }
 
 @app.get("/api/signals")
@@ -1032,6 +1117,106 @@ async def get_ml_stats():
         "model_type": stats['model_type'],
         "status": "Active" if stats['is_trained'] else f"Learning ({stats['trades_with_results']}/30)"
     }
+
+@app.get("/mobile")
+async def mobile_dashboard():
+    """Mobile-friendly status page"""
+    try:
+        portfolio = signal_generator.portfolio
+        zone_name, zone_config = get_current_market_zone()
+        
+        # Calculate daily P&L
+        daily_pnl = portfolio.get_total_value() - portfolio.initial_capital
+        daily_pnl_pct = (daily_pnl / portfolio.initial_capital) * 100
+        
+        # Get recent trades
+        recent_trades = list(portfolio.trades)[-5:] if portfolio.trades else []
+        
+        return {
+            "status": "🟢 Active" if is_market_open() else "🔴 Closed",
+            "portfolio": {
+                "value": f"${portfolio.get_total_value():,.0f}",
+                "daily_pnl": f"{'+'if daily_pnl>=0 else ''}{daily_pnl:,.0f}",
+                "daily_pct": f"{'+'if daily_pnl_pct>=0 else ''}{daily_pnl_pct:.1f}%",
+                "cash": f"${portfolio.cash:,.0f}",
+                "positions": len(portfolio.positions)
+            },
+            "trading": {
+                "zone": zone_name.replace('_', ' ').title(),
+                "multiplier": f"{zone_config.get('multiplier', 1)}x",
+                "trades_today": len([t for t in portfolio.trades if t["timestamp"][:10] == datetime.now().date().isoformat()]),
+                "last_trade": recent_trades[-1]["timestamp"][:16] if recent_trades else "None"
+            },
+            "ml": {
+                "status": "Active" if ML_ENABLED and ml_brain and ml_brain.is_trained else "Learning",
+                "accuracy": f"{ml_brain.get_stats()['accuracy']*100:.0f}%" if ML_ENABLED and ml_brain else "N/A"
+            },
+            "recent": [
+                {
+                    "time": t["timestamp"][11:16],
+                    "symbol": t["symbol"],
+                    "action": "🟢" if t["action"] == "BUY" else "🔴",
+                    "price": f"${t['price']:.2f}"
+                }
+                for t in recent_trades
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Mobile dashboard error: {e}")
+        return {"status": "Error", "message": str(e)}
+
+@app.get("/quick")
+async def quick_status():
+    """Ultra-simple status for phone widgets"""
+    try:
+        portfolio = signal_generator.portfolio
+        value = portfolio.get_total_value()
+        pnl = value - portfolio.initial_capital
+        
+        return {
+            "value": round(value),
+            "pnl": round(pnl),
+            "pct": round((pnl / portfolio.initial_capital) * 100, 1),
+            "trades": len([t for t in portfolio.trades if t["timestamp"][:10] == datetime.now().date().isoformat()]),
+            "open": is_market_open()
+        }
+    except:
+        return {"value": 0, "pnl": 0, "pct": 0, "trades": 0, "open": False}
+
+@app.get("/api/trade-logs")
+async def get_trade_logs(date: Optional[str] = None):
+    """Get trade logs for analysis"""
+    try:
+        if not date:
+            date = datetime.now().strftime("%Y%m%d")
+        
+        log_file = f'trade_logs/trades_{date}.csv'
+        
+        if not os.path.exists(log_file):
+            return {"error": "No logs for this date", "date": date}
+        
+        import csv
+        trades = []
+        with open(log_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                trades.append(row)
+        
+        # Calculate summary stats
+        total_trades = len(trades)
+        buy_trades = len([t for t in trades if t['action'] == 'BUY'])
+        sell_trades = len([t for t in trades if t['action'] == 'SELL'])
+        
+        return {
+            "date": date,
+            "total_trades": total_trades,
+            "buy_trades": buy_trades,
+            "sell_trades": sell_trades,
+            "trades": trades[-20:],  # Last 20 trades
+            "log_file": log_file
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post("/api/force-exit")
 async def force_exit(symbol: str = None):
@@ -1220,13 +1405,14 @@ async def startup():
     
     logger.info("="*60)
     logger.info(f"{PLATFORM_NAME} v{PLATFORM_VERSION}")
-    logger.info("Multi-Strategy Zone-Aware Trading System")
+    logger.info("SIMULATED TRADING - Testing AI Performance")
+    logger.info("No real money or trades - Safe testing environment")
     logger.info(f"ML Brain: {'ACTIVE - Simple Learning' if ML_ENABLED else 'DISABLED'}")
-    logger.info(f"Alpaca: {'PAPER' if PAPER_TRADING else 'LIVE'} Trading")
     logger.info(f"Auto Trading: {'ENABLED' if AUTO_TRADING_ENABLED else 'DISABLED'}")
     logger.info(f"Min Confidence: {MIN_CONFIDENCE:.1%}")
     logger.info(f"Risk-Taking: Progressive threshold lowering for learning")
     logger.info(f"Stock Universe: {len(STOCK_UNIVERSE)} stocks")
+    logger.info("Data Source: Yahoo Finance (real market data)")
     logger.info("="*60)
 
 if __name__ == "__main__":
