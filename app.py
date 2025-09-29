@@ -29,13 +29,23 @@ logger = logging.getLogger(__name__)
 # FastAPI imports
 from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 import uvicorn
 
 # External libraries
 import yfinance as yf
 import pytz
 from collections import deque
+import requests
+
+# Import data provider for Polygon/Yahoo smart switching
+try:
+    from data_provider import data_provider
+    DATA_PROVIDER_ENABLED = True
+    logger.info("Data provider loaded - Polygon for volatility hours")
+except:
+    DATA_PROVIDER_ENABLED = False
+    logger.warning("Data provider not found - using Yahoo only")
 
 # Import ML brain for learning
 ML_ENABLED = False
@@ -79,15 +89,6 @@ DEFAULT_POSITION_SIZE = int(os.getenv("DEFAULT_POSITION_SIZE", "5000"))
 SIGNAL_INTERVAL = int(os.getenv("SIGNAL_INTERVAL", "60"))
 AUTO_TRADING_ENABLED = os.getenv("AUTO_TRADING_DEFAULT_ENABLED", "true").lower() == "true"
 AUTO_TRADE_MIN_CONF = float(os.getenv("AUTO_TRADE_MIN_CONFIDENCE", "0.50"))  # Lower for learning
-
-# Alpaca configuration
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY_ID")
-ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-PAPER_TRADING = os.getenv("PAPER_TRADING_DEFAULT", "true").lower() == "true"
-
-# Stock universe from environment
-STOCK_UNIVERSE = os.getenv("STOCK_UNIVERSE", "SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,AMD").split(",")
 
 # Platform info
 PLATFORM_NAME = os.getenv("PLATFORM_NAME", "Photon AI Trading Platform")
@@ -155,7 +156,7 @@ def get_current_market_zone() -> Tuple[str, Dict]:
     except:
         return "unknown", {"multiplier": 1.0, "threshold": 0.45, "strategies": []}
 
-# Expanded universe for testing
+# Stock universe for testing
 STOCK_UNIVERSE = [
     "SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD"
 ]
@@ -479,6 +480,31 @@ class StrategyAggregator:
         return {"action": "HOLD", "confidence": 0}
 
 # ============================================
+# DATA FETCHING WITH POLYGON/YAHOO
+# ============================================
+
+async def get_market_data(symbol: str) -> pd.DataFrame:
+    """Get market data using data provider (Polygon for volatility, Yahoo otherwise)"""
+    if DATA_PROVIDER_ENABLED:
+        try:
+            return await data_provider.get_market_data(symbol)
+        except:
+            pass
+    
+    # Fallback to Yahoo Finance directly
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1d", interval="1m")
+        
+        if hist.empty:
+            hist = ticker.history(period="5d", interval="5m")
+        
+        return hist if not hist.empty else None
+    except Exception as e:
+        logger.error(f"Error fetching {symbol}: {e}")
+        return None
+
+# ============================================
 # ENHANCED PORTFOLIO MANAGER
 # ============================================
 
@@ -691,14 +717,10 @@ class MultiStrategySignalGenerator:
         if not zone_config.get("strategies"):
             return None
         
-        # Get market data
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d", interval="1m")
-            
-            if hist.empty or len(hist) < 20:
-                return None
-        except:
+        # Get market data - uses Polygon during volatility hours
+        hist = await get_market_data(symbol)
+        
+        if hist is None or hist.empty or len(hist) < 20:
             return None
         
         # Run strategies for this zone
@@ -873,10 +895,10 @@ class ZoneAwareExitManager:
         
         for symbol, position in list(self.portfolio.positions.items()):
             try:
-                ticker = yf.Ticker(symbol)
-                recent = ticker.history(period="1d", interval="1m")
+                # Get market data - uses Polygon during volatility hours
+                recent = await get_market_data(symbol)
                 
-                if recent.empty:
+                if recent is None or recent.empty:
                     continue
                 
                 current_price = recent['Close'].iloc[-1]
@@ -1000,7 +1022,7 @@ async def root():
             "multiplier": zone_config.get("multiplier", 1.0),
             "threshold": zone_config.get("threshold", 0.5)
         },
-        "data_source": "Yahoo Finance (real market data)",
+        "data_source": "Polygon (volatility hours) / Yahoo Finance",
         "railway_app": "ai-signals.up.railway.app"
     }
 
@@ -1129,6 +1151,145 @@ async def get_ml_stats():
         "status": "Active" if stats['is_trained'] else f"Learning ({stats['trades_with_results']}/30)"
     }
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Simple monitoring dashboard"""
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Trading Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .metric {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .label {
+            opacity: 0.8;
+            font-size: 0.9em;
+        }
+        table {
+            width: 100%;
+            margin-top: 10px;
+        }
+        td {
+            padding: 5px;
+        }
+        #status {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 15px;
+            background: #10b981;
+            font-size: 0.8em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Photon AI Trading <span id="status">LOADING</span></h1>
+        
+        <div class="grid">
+            <div class="card">
+                <div class="label">Portfolio Value</div>
+                <div class="metric" id="portfolioValue">$0</div>
+                <div class="label">Zone: <span id="zone">-</span></div>
+            </div>
+            
+            <div class="card">
+                <div class="label">Cash Available</div>
+                <div class="metric" id="cash">$0</div>
+                <div class="label">Positions: <span id="positions">0</span></div>
+            </div>
+            
+            <div class="card">
+                <div class="label">Today's Trades</div>
+                <div class="metric" id="trades">0</div>
+                <div class="label">ML Status: <span id="ml">-</span></div>
+            </div>
+        </div>
+        
+        <div class="card" style="margin-top: 20px;">
+            <h3>Top Signals</h3>
+            <table id="signalsTable"></table>
+        </div>
+        
+        <div class="card" style="margin-top: 20px;">
+            <h3>Open Positions</h3>
+            <table id="positionsTable"></table>
+        </div>
+    </div>
+    
+    <script>
+        async function update() {
+            try {
+                const portfolio = await fetch('/api/portfolio').then(r => r.json());
+                const signals = await fetch('/api/signals').then(r => r.json());
+                const ml = await fetch('/api/ml-stats').then(r => r.json());
+                
+                document.getElementById('portfolioValue').textContent = 
+                    '$' + portfolio.total_value.toFixed(2);
+                document.getElementById('cash').textContent = 
+                    '$' + portfolio.cash.toFixed(2);
+                document.getElementById('positions').textContent = 
+                    portfolio.positions.length;
+                document.getElementById('trades').textContent = 
+                    portfolio.trades_today;
+                document.getElementById('zone').textContent = 
+                    signals.zone.replace('_', ' ').toUpperCase();
+                document.getElementById('ml').textContent = 
+                    ml.enabled ? ml.status : 'Disabled';
+                document.getElementById('status').textContent = 
+                    signals.zone === 'after_hours' ? 'CLOSED' : 'LIVE';
+                
+                // Update signals table
+                const signalsTable = document.getElementById('signalsTable');
+                signalsTable.innerHTML = signals.signals.slice(0, 5).map(s => 
+                    `<tr><td>${s.symbol}</td><td>${s.primary_action}</td><td>${(s.combined_confidence * 100).toFixed(0)}%</td></tr>`
+                ).join('');
+                
+                // Update positions table
+                const positionsTable = document.getElementById('positionsTable');
+                positionsTable.innerHTML = portfolio.positions.map(p =>
+                    `<tr><td>${p.symbol}</td><td>${p.quantity}@${p.avg_price.toFixed(2)}</td></tr>`
+                ).join('');
+                
+            } catch(e) {
+                console.error(e);
+            }
+        }
+        
+        update();
+        setInterval(update, 10000);
+    </script>
+</body>
+</html>
+    """
+
 @app.get("/mobile")
 async def mobile_dashboard():
     """Mobile-friendly status page"""
@@ -1144,7 +1305,7 @@ async def mobile_dashboard():
         recent_trades = list(portfolio.trades)[-5:] if portfolio.trades else []
         
         return {
-            "status": "🟢 Active" if is_market_open() else "🔴 Closed",
+            "status": "Active" if is_market_open() else "Closed",
             "portfolio": {
                 "value": f"${portfolio.get_total_value():,.0f}",
                 "daily_pnl": f"{'+'if daily_pnl>=0 else ''}{daily_pnl:,.0f}",
@@ -1166,7 +1327,7 @@ async def mobile_dashboard():
                 {
                     "time": t["timestamp"][11:16],
                     "symbol": t["symbol"],
-                    "action": "🟢" if t["action"] == "BUY" else "🔴",
+                    "action": t["action"],
                     "price": f"${t['price']:.2f}"
                 }
                 for t in recent_trades
@@ -1193,90 +1354,6 @@ async def quick_status():
         }
     except:
         return {"value": 0, "pnl": 0, "pct": 0, "trades": 0, "open": False}
-
-@app.get("/api/trade-logs")
-async def get_trade_logs(date: Optional[str] = None):
-    """Get trade logs for analysis"""
-    try:
-        if not date:
-            date = datetime.now().strftime("%Y%m%d")
-        
-        log_file = f'trade_logs/trades_{date}.csv'
-        
-        if not os.path.exists(log_file):
-            return {"error": "No logs for this date", "date": date}
-        
-        import csv
-        trades = []
-        with open(log_file, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                trades.append(row)
-        
-        # Calculate summary stats
-        total_trades = len(trades)
-        buy_trades = len([t for t in trades if t['action'] == 'BUY'])
-        sell_trades = len([t for t in trades if t['action'] == 'SELL'])
-        
-        return {
-            "date": date,
-            "total_trades": total_trades,
-            "buy_trades": buy_trades,
-            "sell_trades": sell_trades,
-            "trades": trades[-20:],  # Last 20 trades
-            "log_file": log_file
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/api/force-exit")
-async def force_exit(symbol: str = None):
-    """Force exit positions"""
-    try:
-        if symbol:
-            positions_to_exit = [symbol] if symbol in signal_generator.portfolio.positions else []
-        else:
-            positions_to_exit = list(signal_generator.portfolio.positions.keys())
-        
-        exits = []
-        for sym in positions_to_exit:
-            try:
-                ticker = yf.Ticker(sym)
-                recent = ticker.history(period="1d", interval="1m")
-                current_price = recent['Close'].iloc[-1] if not recent.empty else signal_generator.portfolio.positions[sym]['avg_price']
-                
-                exit_signal = MultiStrategySignal(
-                    symbol=sym,
-                    primary_action="SELL",
-                    strategies_voting={"manual": {"action": "SELL", "confidence": 1.0}},
-                    combined_confidence=1.0,
-                    price=current_price,
-                    zone="manual",
-                    zone_multiplier=1.0,
-                    technical_indicators={},
-                    risk_score=0,
-                    expected_return=0,
-                    stop_loss=0,
-                    take_profit=0,
-                    position_size=signal_generator.portfolio.positions[sym]["qty"],
-                    timestamp=datetime.now().isoformat(),
-                    execution_priority=10,
-                    explanations=["MANUAL EXIT"]
-                )
-                
-                result = signal_generator.portfolio.execute_multi_strategy_trade(exit_signal)
-                if result["success"]:
-                    exits.append(sym)
-            except:
-                pass
-        
-        return {
-            "success": True,
-            "positions_exited": exits,
-            "portfolio_value": signal_generator.portfolio.get_total_value()
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -1360,7 +1437,7 @@ async def enhanced_trading_loop():
                 if consecutive_no_trade_cycles > 3:
                     risk_adjustment = 0.9 ** (consecutive_no_trade_cycles - 3)  # Gradual lowering
                     threshold = max(0.3, threshold * risk_adjustment)  # Floor at 30%
-                    logger.info(f"📊 Risk-taking mode: Threshold lowered to {threshold:.2%} after {consecutive_no_trade_cycles} cycles")
+                    logger.info(f"Risk-taking mode: Threshold lowered to {threshold:.2%} after {consecutive_no_trade_cycles} cycles")
                 
                 # Execute signals above threshold
                 executed = False
@@ -1369,7 +1446,7 @@ async def enhanced_trading_loop():
                         # Add slight randomness for exploration (10% chance to take riskier trades)
                         explore = np.random.random() < 0.1
                         if explore and signal.combined_confidence >= threshold * 0.8:
-                            logger.info(f"🎲 Exploration trade: Taking {signal.symbol} at {signal.combined_confidence:.2%}")
+                            logger.info(f"Exploration trade: Taking {signal.symbol} at {signal.combined_confidence:.2%}")
                         
                         if signal.combined_confidence >= threshold or explore:
                             result = signal_generator.portfolio.execute_multi_strategy_trade(signal)
@@ -1423,72 +1500,18 @@ async def startup():
     logger.info(f"Min Confidence: {MIN_CONFIDENCE:.1%}")
     logger.info(f"Risk-Taking: Progressive threshold lowering for learning")
     logger.info(f"Stock Universe: {len(STOCK_UNIVERSE)} stocks")
-    logger.info("Data Source: Yahoo Finance (real market data)")
+    logger.info(f"Data Source: {'Polygon (volatility) + Yahoo Finance' if DATA_PROVIDER_ENABLED else 'Yahoo Finance only'}")
     logger.info("="*60)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-"""
-ULTRA SIMPLE DASHBOARD - This WILL work
-Replace your broken dashboard with this code
-"""
-
-from fastapi.responses import HTMLResponse
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard():
-    """Dashboard that cannot fail"""
-    html = """<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="30">
-<style>
-body {font-family: monospace; padding: 20px;}
-div {margin: 10px 0; padding: 10px; border: 1px solid #ccc;}
-</style>
-</head>
-<body>
-<h1>AI-SIGNALS DASHBOARD</h1>
-"""
-    
-    # Try to get portfolio data, but don't crash if it fails
-    try:
-        p = signal_generator.portfolio
-        value = p.get_total_value()
-        cash = p.cash
-        positions = len(p.positions)
-        html += f"<div>Value: ${value:,.0f}<br>Cash: ${cash:,.0f}<br>Positions: {positions}</div>"
-    except:
-        html += "<div>Portfolio: Loading...</div>"
-    
-    # Try to show positions
-    try:
-        if signal_generator.portfolio.positions:
-            html += "<div>Positions:<br>"
-            for sym in signal_generator.portfolio.positions:
-                html += f"{sym}<br>"
-            html += "</div>"
-    except:
-        pass
-    
-    # Market status
-    try:
-        if is_market_open():
-            html += "<div>Market: OPEN</div>"
-        else:
-            html += "<div>Market: CLOSED</div>"
-    except:
-        html += "<div>Market: Unknown</div>"
-    
-    html += """
-</body>
-</html>"""
-    
-    return html
 
 @app.get("/status")
 async def status():
     """Simple status that always works"""
-    return {"working": True}
+    return {
+        "working": True,
+        "market_open": is_market_open(),
+        "timestamp": datetime.now().isoformat()
+    }
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
